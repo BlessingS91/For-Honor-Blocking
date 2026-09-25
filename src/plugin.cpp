@@ -1,4 +1,5 @@
 #include "Blocking.h"
+#include "FormCache.h"
 #include "Menu.h"
 #include "Settings.h"
 #include "logger.h"
@@ -12,6 +13,8 @@ void OnMessage(SKSE::MessagingInterface::Message* message) {
         logger::info("Data loaded - loading For Honor Blocking settings");
 
         Settings::Load();
+
+        FormCache::LoadForms();
 
         const auto pluginHandle = SKSE::GetPluginHandle();
 
