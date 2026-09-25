@@ -1,6 +1,11 @@
 #include "Blocking.h"
 
+#include <string>
+
 #include "DirectionalHandler.h"
+#include "Gameplay.h"
+#include "PoiseAPI.h"
+#include "Settings.h"
 #include "logger.h"
 
 namespace Blocking {
@@ -32,148 +37,191 @@ namespace Blocking {
 
     namespace {
 
-        class HitEventSink : public RE::BSTEventSink<RE::TESHitEvent> {
-        public:
-            static HitEventSink* GetSingleton() {
-                static HitEventSink singleton;
-                return std::addressof(singleton);
+        PRECISION_API::PreHitCallbackReturn OnPreHit(const PRECISION_API::PrecisionHitData& hitData) {
+            PRECISION_API::PreHitCallbackReturn result{};
+
+            auto* aggressor = hitData.attacker;
+            auto* defender = hitData.target ? hitData.target->As<RE::Actor>() : nullptr;
+
+            if (!aggressor || !defender) {
+                return result;
             }
 
-            RE::BSEventNotifyControl ProcessEvent(const RE::TESHitEvent* event,
-                                                  RE::BSTEventSource<RE::TESHitEvent>*) override {
-                if (!event) {
-                    return RE::BSEventNotifyControl::kContinue;
+            if (!defender->IsBlocking()) {
+                return result;
+            }
+
+            std::int32_t attackDirection = 0;
+            std::int32_t blockDirection = 0;
+
+            const bool gotAttackDirection = aggressor->GetGraphVariableInt("AttackDirectionNPC", attackDirection);
+
+            const bool gotBlockDirection = defender->GetGraphVariableInt("CameraMovementCMF", blockDirection);
+
+            if (!gotAttackDirection || !gotBlockDirection) {
+                if (Settings::debugLogging) {
+                    logger::info(
+                        "PRECISION BLOCK | Direction read failed | "
+                        "AttackDirectionNPC={} | "
+                        "CameraMovementCMF={}",
+                        gotAttackDirection ? std::to_string(attackDirection) : "FAILED",
+                        gotBlockDirection ? std::to_string(blockDirection) : "FAILED");
                 }
 
-                auto* target = event->target.get();
-                auto* attacker = event->cause.get();
+                return result;
+            }
 
-                if (!target || !attacker) {
-                    return RE::BSEventNotifyControl::kContinue;
-                }
+            const bool successful = DirectionalHandler::IsSuccessfulBlock(attackDirection, blockDirection);
 
-                auto* defender = target->As<RE::Actor>();
-                auto* aggressor = attacker->As<RE::Actor>();
+            const bool powerAttack = aggressor->IsPowerAttacking();
 
-                if (!defender || !aggressor) {
-                    return RE::BSEventNotifyControl::kContinue;
-                }
-
-                // Only process actual blocking attempts.
-                if (!defender->IsBlocking()) {
-                    return RE::BSEventNotifyControl::kContinue;
-                }
-
-                std::int32_t attackDirection = 0;
-                std::int32_t blockDirection = 0;
-
-                const bool gotAttackDirection = aggressor->GetGraphVariableInt("AttackDirectionNPC", attackDirection);
-
-                const bool gotBlockDirection = defender->GetGraphVariableInt("CameraMovementCMF", blockDirection);
-
+            if (Settings::debugLogging) {
                 logger::info(
-                    "BLOCK EVENT | "
-                    "Attacker={} [{}] | "
-                    "AttackDirectionNPC={} ({}) | "
-                    "Defender={} [{}] | "
-                    "CameraMovementCMF={} ({})",
-                    GetActorName(aggressor), aggressor->IsPlayerRef() ? "PLAYER" : "NPC",
-                    gotAttackDirection ? attackDirection : -1,
-                    gotAttackDirection ? GraphDirectionName(attackDirection) : "READ FAILED", GetActorName(defender),
-                    defender->IsPlayerRef() ? "PLAYER" : "NPC", gotBlockDirection ? blockDirection : -1,
-                    gotBlockDirection ? GraphDirectionName(blockDirection) : "READ FAILED");
-
-                if (!gotAttackDirection || !gotBlockDirection) {
-                    logger::info("BLOCK EVENT RESULT | READ FAILED");
-
-                    return RE::BSEventNotifyControl::kContinue;
-                }
-
-                const bool successful = DirectionalHandler::IsSuccessfulBlock(attackDirection, blockDirection);
-
-                logger::info(
-                    "BLOCK EVENT RESULT | "
+                    "PRECISION BLOCK | "
                     "AttackDirectionNPC={} ({}) | "
                     "CameraMovementCMF={} ({}) | "
+                    "Type={} | "
                     "RESULT={}",
                     attackDirection, GraphDirectionName(attackDirection), blockDirection,
-                    GraphDirectionName(blockDirection), successful ? "SUCCESS" : "FAIL");
-
-                if (!successful) {
-                    return RE::BSEventNotifyControl::kContinue;
-                }
-
-                const bool powerAttack = event->flags.any(RE::TESHitEvent::Flag::kPowerAttack);
-
-                logger::info(
-                    "Directional block SUCCESS | "
-                    "attacker={} [{}] | "
-                    "defender={} [{}] | "
-                    "type={}",
-                    GetActorName(aggressor), aggressor->IsPlayerRef() ? "PLAYER" : "NPC", GetActorName(defender),
-                    defender->IsPlayerRef() ? "PLAYER" : "NPC", powerAttack ? "POWER" : "LIGHT");
-
-                // Only light attacks receive the recoil reaction.
-                // Damage, stagger, and hit processing are handled elsewhere.
-                if (powerAttack) {
-                    return RE::BSEventNotifyControl::kContinue;
-                }
-
-                // Interrupt attacker.
-                aggressor->NotifyAnimationGraph("MCO_Recovery");
-                aggressor->NotifyAnimationGraph("staggerStop");
-                aggressor->NotifyAnimationGraph("recoilStop");
-                aggressor->NotifyAnimationGraph("MCO_EndAnimation");
-                aggressor->NotifyAnimationGraph("attackStop");
-
-                // Recoil attacker.
-                aggressor->NotifyAnimationGraph("recoilLargeStart");
-
-                logger::info(
-                    "Light attack directional block | "
-                    "attacker interrupted and recoiled | "
-                    "attacker={} | defender={}",
-                    GetActorName(aggressor), GetActorName(defender));
-
-                return RE::BSEventNotifyControl::kContinue;
+                    GraphDirectionName(blockDirection), powerAttack ? "POWER" : "LIGHT",
+                    successful ? "SUCCESS" : "FAIL");
             }
 
-        private:
-            HitEventSink() = default;
-
-            std::string GetActorName(RE::Actor* actor) {
-                if (!actor) {
-                    return "NULL";
-                }
-
-                const char* name = actor->GetName();
-
-                if (name && *name) {
-                    return name;
-                }
-
-                return std::format("Actor {:08X}", actor->GetFormID());
+            if (!successful) {
+                return result;
             }
-        };
+
+            BlockingGameplay::ApplyBlockSpells(aggressor, defender, const_cast<bool*>(&powerAttack));
+
+            if (powerAttack) {
+                const float damageMultiplier = BlockingGameplay::GetPowerAttackDamageMultiplier(defender);
+
+                result.modifiers.push_back({PRECISION_API::PreHitModifier::ModifierType::Damage,
+                                            PRECISION_API::PreHitModifier::ModifierOperation::Multiplicative,
+                                            damageMultiplier});
+
+                result.modifiers.push_back({PRECISION_API::PreHitModifier::ModifierType::Stagger,
+                                            PRECISION_API::PreHitModifier::ModifierOperation::Multiplicative,
+                                            damageMultiplier});
+
+                if (Settings::debugLogging) {
+                    logger::info(
+                        "PRECISION BLOCK | "
+                        "Successful POWER block | "
+                        "DamageMultiplier={} | "
+                        "Attacker Stagger={} | "
+                        "Defender Stagger={}",
+                        damageMultiplier, Settings::powerAttackerStagger, Settings::powerDefenderStagger);
+                }
+
+                return result;
+            }
+
+            const float damageMultiplier = BlockingGameplay::GetLightAttackDamageMultiplier(defender);
+
+            result.modifiers.push_back({PRECISION_API::PreHitModifier::ModifierType::Damage,
+                                        PRECISION_API::PreHitModifier::ModifierOperation::Multiplicative,
+                                        damageMultiplier});
+
+            result.modifiers.push_back({PRECISION_API::PreHitModifier::ModifierType::Stagger,
+                                        PRECISION_API::PreHitModifier::ModifierOperation::Multiplicative,
+                                        damageMultiplier});
+
+            if (BlockingGameplay::HasSuperiorBlockPerk(defender)) {
+                BlockingGameplay::ApplyLargeRecoil(aggressor, defender);
+            } else {
+                BlockingGameplay::ApplyNormalRecoil(aggressor, defender);
+            }
+
+            if (Settings::debugLogging) {
+                logger::info(
+                    "PRECISION BLOCK | "
+                    "Successful LIGHT block | "
+                    "DamageMultiplier={} | "
+                    "Attacker Stagger={} | "
+                    "Defender Stagger={} | "
+                    "Attacker interrupted and recoiled",
+                    damageMultiplier, Settings::lightAttackerStagger, Settings::lightDefenderStagger);
+            }
+
+            return result;
+        }
 
     }
 
-    void Install() {
-        logger::info("Installing Blocking TESHitEvent system...");
+    float OnPoiseDamage(RE::Actor* attacker, RE::Actor* target, float damage) {
+        if (!attacker || !target || !target->IsBlocking()) {
+            return damage;
+        }
 
-        auto* eventSource = RE::ScriptEventSourceHolder::GetSingleton();
+        std::int32_t attackDirection = 0;
+        std::int32_t blockDirection = 0;
 
-        if (!eventSource) {
-            logger::error("Failed to get ScriptEventSourceHolder");
+        const bool gotAttackDirection = attacker->GetGraphVariableInt("AttackDirectionNPC", attackDirection);
 
+        const bool gotBlockDirection = target->GetGraphVariableInt("CameraMovementCMF", blockDirection);
+
+        if (!gotAttackDirection || !gotBlockDirection) {
+            return damage;
+        }
+
+        if (!DirectionalHandler::IsSuccessfulBlock(attackDirection, blockDirection)) {
+            return damage;
+        }
+
+        const bool powerAttack = attacker->IsPowerAttacking();
+
+        const float multiplier = powerAttack ? BlockingGameplay::GetPowerAttackDamageMultiplier(target)
+                                             : BlockingGameplay::GetLightAttackDamageMultiplier(target);
+
+        const float result = damage * multiplier;
+
+        if (Settings::debugLogging) {
+            logger::info(
+                "POISE BLOCK | "
+                "Type={} | "
+                "Original={} | "
+                "Multiplier={} | "
+                "Result={}",
+                powerAttack ? "POWER" : "LIGHT", damage, multiplier, result);
+        }
+
+        return result;
+    }
+
+    void Install(SKSE::PluginHandle pluginHandle, PRECISION_API::IVPrecision1* precisionAPI) {
+        if (PoiseAPI::Load()) {
+            if (!PoiseAPI::RegisterDamageCallback(&OnPoiseDamage)) {
+                logger::error("Failed to register Poise damage callback");
+            } else {
+                logger::info("Poise damage callback registered successfully");
+            }
+        } else {
+            logger::warn("Chocolate Poise Reforged API unavailable");
+        }
+
+        logger::info("Installing Blocking Precision PreHit system...");
+
+        if (!precisionAPI) {
+            logger::error(
+                "Precision API unavailable. "
+                "PreHit system was not installed.");
             return;
         }
 
-        eventSource->AddEventSink<RE::TESHitEvent>(HitEventSink::GetSingleton());
+        PRECISION_API::PreHitCallback callback = OnPreHit;
 
-        logger::info("TESHitEvent blocking sink registered successfully");
+        const auto result = precisionAPI->AddPreHitCallback(pluginHandle, std::move(callback));
 
+        if (result != PRECISION_API::APIResult::OK) {
+            logger::error(
+                "Failed to register Precision PreHit callback. "
+                "Result={}",
+                static_cast<int>(result));
+            return;
+        }
+
+        logger::info("Precision PreHit callback registered successfully");
         logger::info("Blocking system installation complete");
     }
-
 }
