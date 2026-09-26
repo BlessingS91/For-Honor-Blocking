@@ -209,7 +209,9 @@ namespace Blocking {
             ApplyBlockSpells(aggressor, defender, powerAttack);
 
             if (powerAttack) {
-                const float damageMultiplier = 0.5f;
+                const float reduction = Settings::blockSkillLevel * Settings::powerAttackReductionPerLevel;
+
+                const float damageMultiplier = std::max(0.0f, 1.0f - (reduction / 100.0f));
 
                 result.modifiers.push_back({PRECISION_API::PreHitModifier::ModifierType::Damage,
                                             PRECISION_API::PreHitModifier::ModifierOperation::Multiplicative,
@@ -223,16 +225,21 @@ namespace Blocking {
                     logger::info(
                         "PRECISION BLOCK | "
                         "Successful POWER block | "
+                        "BlockSkill={} | "
+                        "Reduction={} | "
                         "Damage/Stagger multiplier={} | "
                         "Attacker Stagger={} | "
                         "Defender Stagger={}",
-                        damageMultiplier, Settings::powerAttackerStagger, Settings::powerDefenderStagger);
+                        Settings::blockSkillLevel, reduction, damageMultiplier, Settings::powerAttackerStagger,
+                        Settings::powerDefenderStagger);
                 }
 
                 return result;
             }
 
-            const float damageMultiplier = 0.5f;
+            const float reduction = Settings::blockSkillLevel * Settings::lightAttackReductionPerLevel;
+
+            const float damageMultiplier = std::max(0.0f, 1.0f - (reduction / 100.0f));
 
             result.modifiers.push_back({PRECISION_API::PreHitModifier::ModifierType::Damage,
                                         PRECISION_API::PreHitModifier::ModifierOperation::Multiplicative,
@@ -256,11 +263,14 @@ namespace Blocking {
                 logger::info(
                     "PRECISION BLOCK | "
                     "Successful LIGHT block | "
+                    "BlockSkill={} | "
+                    "Reduction={} | "
                     "Damage/Stagger multiplier={} | "
                     "Attacker Stagger={} | "
                     "Defender Stagger={} | "
                     "Attacker interrupted and recoiled",
-                    damageMultiplier, Settings::lightAttackerStagger, Settings::lightDefenderStagger);
+                    Settings::blockSkillLevel, reduction, damageMultiplier, Settings::lightAttackerStagger,
+                    Settings::lightDefenderStagger);
             }
 
             return result;
@@ -290,9 +300,12 @@ namespace Blocking {
 
         const bool powerAttack = attacker->IsPowerAttacking();
 
-        const float reduction = 0.5f;
+        const float reduction = Settings::blockSkillLevel * (powerAttack ? Settings::powerAttackReductionPerLevel
+                                                                         : Settings::lightAttackReductionPerLevel);
 
-        const float result = damage * reduction;
+        const float damageMultiplier = std::max(0.0f, 1.0f - (reduction / 100.0f));
+
+        const float result = damage * damageMultiplier;
 
         if (Settings::debugLogging) {
             logger::info(

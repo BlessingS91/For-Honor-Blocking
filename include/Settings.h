@@ -4,16 +4,16 @@
 
 namespace Settings {
 
-    extern float lightAttackReductionPerLevel;
+    extern float blockSkillLevel;
+    extern bool hasEmpoweredBlock;
 
+    extern float lightAttackReductionPerLevel;
     extern float powerAttackReductionPerLevel;
 
     extern float lightAttackerStagger;
-
     extern float lightDefenderStagger;
 
     extern float powerAttackerStagger;
-
     extern float powerDefenderStagger;
 
     extern std::string superiorBlockPerk;
