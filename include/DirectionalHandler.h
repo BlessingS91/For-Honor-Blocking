@@ -22,18 +22,15 @@ namespace DirectionalHandler {
     bool Initialize();
 
     // Returns the cached directional attack effects.
-    const AttackEffects& GetAttackEffects();
+    const AttackEffects* GetAttackEffects();
 
-    // Converts CameraMovementCMF into the player's
-    // three directional block categories.
-    Direction GetBlockDirection(int cameraMovement);
+    // Converts CameraMovementFHB into the player's block direction.
+    Direction GetBlockDirection(int cameraMovementFHB);
 
-    // Converts AttackDirectionNPC into the NPC's
-    // three directional attack categories.
-    Direction GetAttackDirection(int attackDirectionNPC);
+    // Converts AttackDirectionFHB into the NPC's attack direction.
+    Direction GetAttackDirection(int attackDirectionFHB);
 
-    // Determines whether the player's block direction
-    // successfully counters the NPC's attack direction.
-    bool IsSuccessfulBlock(int attackDirectionNPC, int cameraMovement);
+    // Determines whether the player's block counters the NPC's attack.
+    bool IsSuccessfulBlock(int attackDirectionFHB, int cameraMovementFHB);
 
 }

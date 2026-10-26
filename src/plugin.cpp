@@ -2,6 +2,7 @@
 #include "FormCache.h"
 #include "Hooks.h"
 #include "Menu.h"
+#include "ParryWindow.h"
 #include "Settings.h"
 #include "logger.h"
 
@@ -20,6 +21,7 @@ void OnMessage(SKSE::MessagingInterface::Message* message) {
             auto* precisionAPI = PRECISION_API::RequestPluginAPI();
             Blocking::Install(pluginHandle, static_cast<PRECISION_API::IVPrecision1*>(precisionAPI));
             logger::info("Blocking systems installed");
+            ParryWindow::Events::AddEventSink();
 
             Menu::Install();
             break;

@@ -23,7 +23,7 @@ namespace {
         const float previousLightReduction = Settings::lightAttackReductionPerLevel;
 
         ui::SliderFloat("Light Attack Reduction per Block level", &Settings::lightAttackReductionPerLevel, 0.0f, 1.0f,
-                        "%.0f%%");
+                        "%.2f", 0.01f);
 
         if (Settings::lightAttackReductionPerLevel != previousLightReduction) {
             Settings::Save();
@@ -32,7 +32,7 @@ namespace {
         const float previousPowerReduction = Settings::powerAttackReductionPerLevel;
 
         ui::SliderFloat("Power Attack Reduction Block level.", &Settings::powerAttackReductionPerLevel, 0.0f, 1.0f,
-                        "%.0f%%");
+                        "%.2f", 0.01f);
 
         if (Settings::powerAttackReductionPerLevel != previousPowerReduction) {
             Settings::Save();
@@ -80,6 +80,14 @@ namespace {
         ui::Text("Superior Block Perk");
         ui::Text("Defenders with this perk perform a large recoil instead of a normal recoil.");
 
+        const bool previousEmpoweredBlockRequired = Settings::empoweredBlockRequired;
+
+        ui::Checkbox("Require Empowered Block Perk", &Settings::empoweredBlockRequired);
+
+        if (Settings::empoweredBlockRequired != previousEmpoweredBlockRequired) {
+            Settings::Save();
+        }
+
         char superiorBlockPerk[256]{};
         std::strncpy(superiorBlockPerk, Settings::superiorBlockPerk.c_str(), sizeof(superiorBlockPerk) - 1);
 
@@ -87,6 +95,34 @@ namespace {
             Settings::superiorBlockPerk = superiorBlockPerk;
             Settings::Save();
         }
+
+        ui::Separator();
+
+        ui::Text("Block Stamina Consumption");
+        ui::Text("Controls stamina consumed when blocking an incoming attack.");
+
+#define STAMINA_SLIDER(label, setting)                                    \
+    do {                                                                  \
+        const float previous = Settings::setting;                         \
+        ui::SliderFloat(label, &Settings::setting, 0.0f, 100.0f, "%.1f"); \
+        if (Settings::setting != previous) {                              \
+            Settings::Save();                                             \
+        }                                                                 \
+    } while (false)
+
+        STAMINA_SLIDER("One-Handed Sword", staminaOneHandSword);
+        STAMINA_SLIDER("Dagger", staminaDagger);
+        STAMINA_SLIDER("One-Handed Axe", staminaOneHandAxe);
+        STAMINA_SLIDER("Mace", staminaMace);
+        STAMINA_SLIDER("Two-Handed Sword", staminaTwoHandSword);
+        STAMINA_SLIDER("Two-Handed Axe", staminaTwoHandAxe);
+        STAMINA_SLIDER("Bow", staminaBow);
+        STAMINA_SLIDER("Crossbow", staminaCrossbow);
+        STAMINA_SLIDER("Staff", staminaStaff);
+        STAMINA_SLIDER("Unarmed", staminaUnarmed);
+        STAMINA_SLIDER("Other", staminaOther);
+
+#undef STAMINA_SLIDER
 
         ui::Separator();
 

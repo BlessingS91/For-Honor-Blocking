@@ -1,9 +1,9 @@
 #include "Blocking.h"
 
-#include <format>
 #include <string>
 
 #include "DirectionalHandler.h"
+#include "Gameplay.h"
 #include "PoiseAPI.h"
 #include "Settings.h"
 #include "logger.h"
@@ -13,149 +13,185 @@ namespace Blocking {
     const char* GraphDirectionName(std::int32_t value) {
         switch (value) {
             case 0:
-                return "No Movement";
+                return "Neutral";
             case 1:
-                return "Forward";
+                return "Top";
             case 2:
-                return "Forward-Right";
-            case 3:
                 return "Right";
-            case 4:
-                return "Backward-Right";
-            case 5:
-                return "Backward";
-            case 6:
-                return "Backward-Left";
-            case 7:
+            case 3:
                 return "Left";
-            case 8:
-                return "Forward-Left";
             default:
-                return "UNKNOWN";
+                return "0";
         }
     }
-
     namespace {
 
-        void DebugLog(const char* message) {
-            if (Settings::debugLogging) {
-                logger::info("PRECISION BLOCK | {}", message);
+        float GetBlockStaminaCost(RE::Actor* a_attacker) {
+            if (!a_attacker) {
+                return 0.0f;
+            }
+
+            auto* equipped = a_attacker->GetEquippedObject(false);
+            if (!equipped) {
+                equipped = a_attacker->GetEquippedObject(true);
+            }
+
+            auto* weapon = equipped ? equipped->As<RE::TESObjectWEAP>() : nullptr;
+
+            if (!weapon) {
+                return Settings::staminaUnarmed;
+            }
+
+            switch (weapon->GetWeaponType()) {
+                case RE::WEAPON_TYPE::kOneHandSword:
+                    return Settings::staminaOneHandSword;
+
+                case RE::WEAPON_TYPE::kOneHandDagger:
+                    return Settings::staminaDagger;
+
+                case RE::WEAPON_TYPE::kOneHandAxe:
+                    return Settings::staminaOneHandAxe;
+
+                case RE::WEAPON_TYPE::kOneHandMace:
+                    return Settings::staminaMace;
+
+                case RE::WEAPON_TYPE::kTwoHandSword:
+                    return Settings::staminaTwoHandSword;
+
+                case RE::WEAPON_TYPE::kTwoHandAxe:
+                    return Settings::staminaTwoHandAxe;
+
+                case RE::WEAPON_TYPE::kBow:
+                    return Settings::staminaBow;
+
+                case RE::WEAPON_TYPE::kCrossbow:
+                    return Settings::staminaCrossbow;
+
+                case RE::WEAPON_TYPE::kStaff:
+                    return Settings::staminaStaff;
+
+                case RE::WEAPON_TYPE::kHandToHandMelee:
+                    return Settings::staminaUnarmed;
+
+                default:
+                    return Settings::staminaOther;
             }
         }
 
-        void SpawnBlockEffects(RE::Actor* defender) {
-            if (!defender) {
+        void NotifyHonorCombatReset(RE::Actor* attacker) {
+            if (!attacker) {
                 return;
             }
 
-            constexpr const char* effects[] = {"HBLOCK_SekiroSSparks", "HBLOCK_SekiroSSparksPhysics",
-                                               "HBLOCK_SekiroSFlash", "HBLOCK_SekiroSFlashShield"};
-
-            for (const auto* editorID : effects) {
-                const auto effect = RE::TESForm::LookupByEditorID<RE::BGSExplosion>(editorID);
-
-                if (!effect) {
-                    if (Settings::debugLogging) {
-                        logger::warn(
-                            "PRECISION BLOCK | Explosion not found | "
-                            "Actor={} | Explosion={}",
-                            defender->GetName(), editorID);
-                    }
-
-                    continue;
-                }
-
-                defender->PlaceObjectAtMe(effect, false);
-
-                if (Settings::debugLogging) {
-                    logger::info(
-                        "PRECISION BLOCK | Explosion spawned | "
-                        "Actor={} | Explosion={}",
-                        defender->GetName(), editorID);
-                }
+            auto* eventSource = SKSE::GetModCallbackEventSource();
+            if (!eventSource) {
+                logger::warn("Honor Combat reset event source unavailable");
+                return;
             }
+
+            SKSE::ModCallbackEvent event{RE::BSFixedString("HonorCombatResetAttackDirection"), RE::BSFixedString(""),
+                                         0.0f, attacker};
+
+            eventSource->SendEvent(&event);
         }
 
-        void Cast_Spell(RE::Actor* a_actor, const char* a_spell, float a_mag) {
-            if (!a_actor) {
-                return;
-            }
+        // void SpawnBlockEffects(RE::Actor* defender) {
+        //     if (!defender) {
+        //         return;
+        //     }
 
-            const auto e_spell = RE::TESForm::LookupByEditorID<RE::MagicItem>(a_spell);
+        //     constexpr const char* effects[] = {"HBLOCK_SekiroSSparks", "HBLOCK_SekiroSSparksPhysics",
+        //                                        "HBLOCK_SekiroSFlash", "HBLOCK_SekiroSFlashShield"};
 
-            if (!e_spell) {
-                if (Settings::debugLogging) {
-                    logger::warn(
-                        "PRECISION BLOCK | Spell not found | "
-                        "Actor={} | Spell={} | Magnitude={}",
-                        a_actor->GetName(), a_spell, a_mag);
-                }
+        //     for (const auto* editorID : effects) {
+        //         const auto effect = RE::TESForm::LookupByEditorID<RE::BGSExplosion>(editorID);
 
-                return;
-            }
+        //         if (!effect) {
+        //             if (Settings::debugLogging) {
+        //                 logger::warn(
+        //                     "PRECISION BLOCK | Explosion not found | "
+        //                     "Actor={} | Explosion={}",
+        //                     defender->GetName(), editorID);
+        //             }
 
-            const auto caster = a_actor->GetMagicCaster(RE::MagicSystem::CastingSource::kInstant);
+        //             continue;
+        //         }
 
-            if (!caster) {
-                if (Settings::debugLogging) {
-                    logger::warn(
-                        "PRECISION BLOCK | Magic caster unavailable | "
-                        "Actor={} | Spell={} | Magnitude={}",
-                        a_actor->GetName(), a_spell, a_mag);
-                }
+        //         defender->PlaceObjectAtMe(effect, false);
 
-                return;
-            }
+        //         if (Settings::debugLogging) {
+        //             logger::info(
+        //                 "PRECISION BLOCK | Explosion spawned | "
+        //                 "Actor={} | Explosion={}",
+        //                 defender->GetName(), editorID);
+        //         }
+        //     }
+        // }
 
-            caster->CastSpellImmediate(e_spell, false, a_actor, 1, false, a_mag, a_actor);
+        // void Cast_Spell(RE::Actor* a_actor, const char* a_spell, float a_mag) {
+        //     if (!a_actor) {
+        //         return;
+        //     }
 
-            if (Settings::debugLogging) {
-                logger::info(
-                    "PRECISION BLOCK | Spell cast | "
-                    "Actor={} | Spell={} | Magnitude={}",
-                    a_actor->GetName(), a_spell, a_mag);
-            }
-        }
+        //     const auto e_spell = RE::TESForm::LookupByEditorID<RE::MagicItem>(a_spell);
 
-        void ApplyBlockSpells(RE::Actor* aggressor, RE::Actor* defender, bool powerAttack) {
-            if (!aggressor || !defender) {
-                return;
-            }
+        //     if (!e_spell) {
+        //         if (Settings::debugLogging) {
+        //             logger::warn(
+        //                 "PRECISION BLOCK | Spell not found | "
+        //                 "Actor={} | Spell={} | Magnitude={}",
+        //                 a_actor->GetName(), a_spell, a_mag);
+        //         }
 
-            if (powerAttack) {
-                Cast_Spell(aggressor, "HBLOCK_BlockedPowerAttacker", Settings::powerAttackerStagger);
+        //         return;
+        //     }
 
-                Cast_Spell(defender, "HBLOCK_BlockedPowerDefender", Settings::powerDefenderStagger);
-            } else {
-                Cast_Spell(aggressor, "HBLOCK_BlockedNormalAttacker", Settings::lightAttackerStagger);
+        //     const auto caster = a_actor->GetMagicCaster(RE::MagicSystem::CastingSource::kInstant);
 
-                Cast_Spell(defender, "HBLOCK_BlockedNormalDefender", Settings::lightDefenderStagger);
-            }
+        //     if (!caster) {
+        //         if (Settings::debugLogging) {
+        //             logger::warn(
+        //                 "PRECISION BLOCK | Magic caster unavailable | "
+        //                 "Actor={} | Spell={} | Magnitude={}",
+        //                 a_actor->GetName(), a_spell, a_mag);
+        //         }
 
-            Cast_Spell(defender, "HBLOCK_Effects", powerAttack ? 0.50f : 0.25f);
+        //         return;
+        //     }
 
-            SpawnBlockEffects(defender);
-        }
+        //     caster->CastSpellImmediate(e_spell, false, a_actor, 1, false, a_mag, a_actor);
 
-        std::string GetActorName(RE::Actor* actor) {
-            if (!actor) {
-                return "NULL";
-            }
+        //     if (Settings::debugLogging) {
+        //         logger::info(
+        //             "PRECISION BLOCK | Spell cast | "
+        //             "Actor={} | Spell={} | Magnitude={}",
+        //             a_actor->GetName(), a_spell, a_mag);
+        //     }
+        // }
 
-            const char* name = actor->GetName();
+        // void ApplyBlockSpells(RE::Actor* aggressor, RE::Actor* defender, bool powerAttack) {
+        //     if (!aggressor || !defender) {
+        //         return;
+        //     }
 
-            if (name && *name) {
-                return name;
-            }
+        //     if (powerAttack) {
+        //         Cast_Spell(aggressor, "HBLOCK_BlockedPowerAttacker", Settings::powerAttackerStagger);
 
-            return std::format("Actor {:08X}", actor->GetFormID());
-        }
+        //         Cast_Spell(defender, "HBLOCK_BlockedPowerDefender", Settings::powerDefenderStagger);
+        //     } else {
+        //         Cast_Spell(aggressor, "HBLOCK_BlockedNormalAttacker", Settings::lightAttackerStagger);
 
+        //         Cast_Spell(defender, "HBLOCK_BlockedNormalDefender", Settings::lightDefenderStagger);
+        //     }
+
+        //     Cast_Spell(defender, "HBLOCK_Effects", powerAttack ? 0.50f : 0.25f);
+
+        //     SpawnBlockEffects(defender);
+        // }
         PRECISION_API::PreHitCallbackReturn OnPreHit(const PRECISION_API::PrecisionHitData& hitData) {
             PRECISION_API::PreHitCallbackReturn result{};
 
             auto* aggressor = hitData.attacker;
-
             auto* defender = hitData.target ? hitData.target->As<RE::Actor>() : nullptr;
 
             if (!aggressor || !defender) {
@@ -163,22 +199,23 @@ namespace Blocking {
             }
 
             if (!defender->IsBlocking()) {
+                NotifyHonorCombatReset(aggressor);
                 return result;
             }
 
             std::int32_t attackDirection = 0;
             std::int32_t blockDirection = 0;
 
-            const bool gotAttackDirection = aggressor->GetGraphVariableInt("AttackDirectionNPC", attackDirection);
+            const bool gotAttackDirection = aggressor->GetGraphVariableInt("AttackDirectionFHB", attackDirection);
 
-            const bool gotBlockDirection = defender->GetGraphVariableInt("CameraMovementCMF", blockDirection);
+            const bool gotBlockDirection = defender->GetGraphVariableInt("CameraMovementFHB", blockDirection);
 
             if (!gotAttackDirection || !gotBlockDirection) {
                 if (Settings::debugLogging) {
                     logger::info(
                         "PRECISION BLOCK | Direction read failed | "
-                        "AttackDirectionNPC={} | "
-                        "CameraMovementCMF={}",
+                        "AttackDirectionFHB={} | "
+                        "CameraMovementFHB={}",
                         gotAttackDirection ? std::to_string(attackDirection) : "FAILED",
                         gotBlockDirection ? std::to_string(blockDirection) : "FAILED");
                 }
@@ -186,15 +223,33 @@ namespace Blocking {
                 return result;
             }
 
+            logger::info(
+                "[BLOCK DEBUG] Defender={} IsBlocking={} AttackRead={} AttackDirection={} BlockRead={} "
+                "BlockDirection={}",
+                defender->GetName(), defender->IsBlocking(), gotAttackDirection, attackDirection, gotBlockDirection,
+                blockDirection);
+
             const bool successful = DirectionalHandler::IsSuccessfulBlock(attackDirection, blockDirection);
 
             const bool powerAttack = aggressor->IsPowerAttacking();
 
+            const float baseCost = GetBlockStaminaCost(aggressor);
+
+            const float staminaReduction = successful ? (Settings::blockSkillLevel / 100.0f) * 50.0f : 0.0f;
+
+            const float staminaMultiplier = 1.0f - (staminaReduction / 100.0f);
+            const float attackMultiplier = powerAttack ? 2.0f : 1.0f;
+            const float staminaCost = baseCost * attackMultiplier * staminaMultiplier;
+
+            if (staminaCost > 0.0f) {
+                defender->AsActorValueOwner()->DamageActorValue(RE::ActorValue::kStamina, staminaCost);
+            }
+
             if (Settings::debugLogging) {
                 logger::info(
                     "PRECISION BLOCK | "
-                    "AttackDirectionNPC={} ({}) | "
-                    "CameraMovementCMF={} ({}) | "
+                    "AttackDirectionFHB={} ({}) | "
+                    "CameraMovementFHB={} ({}) | "
                     "Type={} | "
                     "RESULT={}",
                     attackDirection, GraphDirectionName(attackDirection), blockDirection,
@@ -202,25 +257,28 @@ namespace Blocking {
                     successful ? "SUCCESS" : "FAIL");
             }
 
+            NotifyHonorCombatReset(aggressor);
+
             if (!successful) {
                 return result;
             }
 
-            ApplyBlockSpells(aggressor, defender, powerAttack);
+            Gameplay::ApplyBlockSpells(aggressor, defender, powerAttack);
+
+            const float reduction = Settings::blockSkillLevel * (powerAttack ? Settings::powerAttackReductionPerLevel
+                                                                             : Settings::lightAttackReductionPerLevel);
+
+            const float damageMultiplier = std::max(0.0f, 1.0f - (reduction / 100.0f));
+
+            result.modifiers.push_back({PRECISION_API::PreHitModifier::ModifierType::Damage,
+                                        PRECISION_API::PreHitModifier::ModifierOperation::Multiplicative,
+                                        damageMultiplier});
+
+            result.modifiers.push_back({PRECISION_API::PreHitModifier::ModifierType::Stagger,
+                                        PRECISION_API::PreHitModifier::ModifierOperation::Multiplicative,
+                                        damageMultiplier});
 
             if (powerAttack) {
-                const float reduction = Settings::blockSkillLevel * Settings::powerAttackReductionPerLevel;
-
-                const float damageMultiplier = std::max(0.0f, 1.0f - (reduction / 100.0f));
-
-                result.modifiers.push_back({PRECISION_API::PreHitModifier::ModifierType::Damage,
-                                            PRECISION_API::PreHitModifier::ModifierOperation::Multiplicative,
-                                            damageMultiplier});
-
-                result.modifiers.push_back({PRECISION_API::PreHitModifier::ModifierType::Stagger,
-                                            PRECISION_API::PreHitModifier::ModifierOperation::Multiplicative,
-                                            damageMultiplier});
-
                 if (Settings::debugLogging) {
                     logger::info(
                         "PRECISION BLOCK | "
@@ -237,27 +295,13 @@ namespace Blocking {
                 return result;
             }
 
-            const float reduction = Settings::blockSkillLevel * Settings::lightAttackReductionPerLevel;
+            const bool useLargeStagger = !Settings::empoweredBlockRequired || Settings::hasEmpoweredBlock;
 
-            const float damageMultiplier = std::max(0.0f, 1.0f - (reduction / 100.0f));
-
-            result.modifiers.push_back({PRECISION_API::PreHitModifier::ModifierType::Damage,
-                                        PRECISION_API::PreHitModifier::ModifierOperation::Multiplicative,
-                                        damageMultiplier});
-
-            result.modifiers.push_back({PRECISION_API::PreHitModifier::ModifierType::Stagger,
-                                        PRECISION_API::PreHitModifier::ModifierOperation::Multiplicative,
-                                        damageMultiplier});
-
-            aggressor->NotifyAnimationGraph("MCO_Recovery");
-            aggressor->NotifyAnimationGraph("staggerStop");
-            aggressor->NotifyAnimationGraph("recoilStop");
-            aggressor->NotifyAnimationGraph("MCO_EndAnimation");
-            aggressor->NotifyAnimationGraph("attackStop");
-            aggressor->NotifyAnimationGraph("recoilLargeStart");
-
-            defender->NotifyAnimationGraph("blockStop");
-            defender->NotifyAnimationGraph("Maxsu_BlockHitWinOpen");
+            if (useLargeStagger) {
+                Gameplay::ApplyLargeStagger(aggressor, defender);
+            } else {
+                Gameplay::ApplyNormalStagger(aggressor, defender);
+            }
 
             if (Settings::debugLogging) {
                 logger::info(
@@ -268,14 +312,13 @@ namespace Blocking {
                     "Damage/Stagger multiplier={} | "
                     "Attacker Stagger={} | "
                     "Defender Stagger={} | "
-                    "Attacker interrupted and recoiled",
+                    "Recoil={}",
                     Settings::blockSkillLevel, reduction, damageMultiplier, Settings::lightAttackerStagger,
-                    Settings::lightDefenderStagger);
+                    Settings::lightDefenderStagger, useLargeStagger ? "LARGE" : "NORMAL");
             }
 
             return result;
         }
-
     }
 
     float OnPoiseDamage(RE::Actor* attacker, RE::Actor* target, float damage) {
@@ -286,9 +329,9 @@ namespace Blocking {
         std::int32_t attackDirection = 0;
         std::int32_t blockDirection = 0;
 
-        const bool gotAttackDirection = attacker->GetGraphVariableInt("AttackDirectionNPC", attackDirection);
+        const bool gotAttackDirection = attacker->GetGraphVariableInt("AttackDirectionFHB", attackDirection);
 
-        const bool gotBlockDirection = target->GetGraphVariableInt("CameraMovementCMF", blockDirection);
+        const bool gotBlockDirection = target->GetGraphVariableInt("CameraMovementFHB", blockDirection);
 
         if (!gotAttackDirection || !gotBlockDirection) {
             return damage;
