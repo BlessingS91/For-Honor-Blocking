@@ -61,10 +61,30 @@ namespace DirectionalHandler {
     }
 
     bool IsSuccessfulBlock(int attackDirectionFHB, int cameraMovementFHB) {
+        return IsSuccessfulBlock(attackDirectionFHB, cameraMovementFHB, false, false);
+    }
+
+    bool IsSuccessfulBlock(int attackDirectionFHB, int cameraMovementFHB, bool allBlock, bool unblockable) {
+        // Unblockable attacks bypass all defensive directions.
+        if (unblockable) {
+            return false;
+        }
+
         const auto attack = GetAttackDirection(attackDirectionFHB);
+
+        // An attack must still have a valid direction.
+        if (attack == Direction::None) {
+            return false;
+        }
+
+        // All-block stance defends against every valid attack direction.
+        if (allBlock) {
+            return true;
+        }
+
         const auto block = GetBlockDirection(cameraMovementFHB);
 
-        if (attack == Direction::None || block == Direction::None) {
+        if (block == Direction::None) {
             return false;
         }
 

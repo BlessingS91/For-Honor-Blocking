@@ -33,4 +33,6 @@ namespace DirectionalHandler {
     // Determines whether the player's block counters the NPC's attack.
     bool IsSuccessfulBlock(int attackDirectionFHB, int cameraMovementFHB);
 
+    // Supports all-block stance and unblockable attacks.
+    bool IsSuccessfulBlock(int attackDirectionFHB, int cameraMovementFHB, bool allBlock, bool unblockable);
 }

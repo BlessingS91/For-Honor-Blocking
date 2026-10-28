@@ -1,8 +1,9 @@
 #include "Blocking.h"
+#include "Events.h"
 #include "FormCache.h"
 #include "Hooks.h"
 #include "Menu.h"
-#include "ParryWindow.h"
+#include "Parry.h"
 #include "Settings.h"
 #include "logger.h"
 
@@ -19,20 +20,26 @@ void OnMessage(SKSE::MessagingInterface::Message* message) {
 
             const auto pluginHandle = SKSE::GetPluginHandle();
             auto* precisionAPI = PRECISION_API::RequestPluginAPI();
+
             Blocking::Install(pluginHandle, static_cast<PRECISION_API::IVPrecision1*>(precisionAPI));
+
             logger::info("Blocking systems installed");
-            ParryWindow::Events::AddEventSink();
+
+            logger::info("Parry system registration attempted");
 
             Menu::Install();
+
+            FHB::Events::AddEventSink();
             break;
         }
+
         case SKSE::MessagingInterface::kNewGame:
         case SKSE::MessagingInterface::kPostLoadGame: {
-            // Safe to register UI hooks or query the player AFTER a save/new game is fully loaded
             Hooks::Register();
             logger::info("Player world loaded - hooks registered");
             break;
         }
+
         default:
             break;
     }
