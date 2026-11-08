@@ -1,54 +1,14 @@
 
 #include "BlockBehavior.h"
 
+#include <atomic>
 #include <cstdint>
+#include <string_view>
 
 #include "logger.h"
 
 namespace {
-
-    void CancelBlocking(RE::PlayerCharacter* player, const char* source) {
-        if (!player) {
-            return;
-        }
-
-        auto* state = player->AsActorState();
-
-        if (!state) {
-            return;
-        }
-
-        const bool wasBlocking = player->IsBlocking();
-        const bool wantedBlocking = state->actorState2.wantBlocking;
-
-        if (!wasBlocking && !wantedBlocking) {
-            return;
-        }
-
-        // Stop blocking before allowing a light attack.
-        const bool stopped = player->NotifyAnimationGraph("blockStop");
-
-        player->SetGraphVariableBool("IsBlocking", false);
-        player->SetGraphVariableBool("IsBashing", false);
-        player->SetGraphVariableInt("iWantBlock", 0);
-
-        state->actorState2.wantBlocking = false;
-
-        logger::info("[BLOCK BEHAVIOR] {} | blockStop={} blocking={} wantBlocking={}", source, stopped,
-                     player->IsBlocking(), static_cast<std::uint32_t>(state->actorState2.wantBlocking));
-    }
-
-    bool IsDualWielding(RE::PlayerCharacter* player) {
-        if (auto leftHand = player->GetEquippedObject(true)) {
-            if (auto leftWeapon = leftHand->As<RE::TESObjectWEAP>()) {
-                if ((int)leftWeapon->GetWeaponType() > 0 && (int)leftWeapon->GetWeaponType() < 5) {
-                    return true;
-                }
-            }
-        }
-
-        return !player->GetEquippedObject(false) && !player->GetEquippedObject(true);
-    }
+    std::atomic_bool g_guardResumeDispatched{false};
 }
 
 MCO* MCO::GetSingleton() {
@@ -74,12 +34,22 @@ void MCO::RegisterAnimationSink() {
 
 RE::BSEventNotifyControl MCO::ProcessEvent(const RE::BSAnimationGraphEvent* a_event,
                                            RE::BSTEventSource<RE::BSAnimationGraphEvent>*) {
-    if (!a_event || a_event->holder != RE::PlayerCharacter::GetSingleton()) {
+    auto* player = RE::PlayerCharacter::GetSingleton();
+
+    if (!a_event || !player || a_event->holder != player) {
         return RE::BSEventNotifyControl::kContinue;
     }
 
-    // Keep automatic attack-to-block transitions disabled.
-    // Preserves MCO attack movement and combos.
+    const std::string_view tag = a_event->tag.c_str();
+
+    if (tag == "attackStart" || tag == "MCO_PowerAttackInitiate" || tag == "MCO_WinOpen" || tag == "MCO_PowerWinOpen") {
+        g_guardResumeDispatched.store(false);
+    }
+
+    if (tag == "MCO_WinClose" || tag == "MCO_PowerWinClose") {
+        // ProcessBlock(tag);
+    }
+
     return RE::BSEventNotifyControl::kContinue;
 }
 
@@ -90,32 +60,26 @@ void MCO::ProcessBlock(std::string_view a_eventTag) {
         return;
     }
 
-    auto* state = player->AsActorState();
+    std::int32_t iWantBlock = 0;
 
-    if (!state) {
+    if (!player->GetGraphVariableInt("iWantBlock", iWantBlock)) {
         return;
     }
 
-    bool MCO_IsInRecovery = false;
-
-    player->GetGraphVariableBool("MCO_IsInRecovery", MCO_IsInRecovery);
-
-    const bool attackWindowClosed = a_eventTag == "MCO_WinClose" || a_eventTag == "AttackWinEnd";
-
-    const bool wantBlocking = state->actorState2.wantBlocking;
-
-    if (!MCO_IsInRecovery && !(attackWindowClosed && wantBlocking)) {
+    if (iWantBlock != 1) {
         return;
     }
 
-    if (IsDualWielding(player)) {
-        if (MCO_IsInRecovery || wantBlocking) {
-            player->NotifyAnimationGraph("MCO_EndAnimation");
-        }
-    } else if (wantBlocking) {
-        player->NotifyAnimationGraph("MCO_EndAnimation");
-        player->NotifyAnimationGraph("blockStart");
+    if (g_guardResumeDispatched.exchange(true)) {
+        return;
     }
+
+    const bool ended = player->NotifyAnimationGraph("MCO_EndAnimation");
+
+    const bool guarded = player->NotifyAnimationGraph("blockStart");
+
+    logger::info("[BLOCK BEHAVIOR] Guard resume | event={} iWantBlock={} end={} blockStart={}", a_eventTag, iWantBlock,
+                 ended, guarded);
 }
 
 void MCO::Hooks::AttackBlockHandler_ProcessButton::thunk(RE::AttackBlockHandler* a_this, RE::ButtonEvent* a_event,
@@ -130,16 +94,13 @@ void MCO::Hooks::AttackBlockHandler_ProcessButton::thunk(RE::AttackBlockHandler*
 
     const bool rightAttack = a_event->QUserEvent() == userEvents->rightAttack;
 
-    // Preserve light attacks from block.
-    if (rightAttack && a_event->IsDown()) {
-        CancelBlocking(player, "Light attack block cancellation");
+    if (rightAttack && a_event->IsDown() && player->IsBlocking()) {
+        const bool stopped = player->NotifyAnimationGraph("blockStop");
+
+        logger::info("[BLOCK BEHAVIOR] Light attack | blockStop={} blocking={}", stopped, player->IsBlocking());
     }
 
-    // Let Skyrim process the attack normally.
     func(a_this, a_event, a_data);
-
-    // Keep disabled: interrupted MCO combos/root motion.
-    // MCO::GetSingleton()->ProcessBlock();
 }
 
 void MCO::Hooks::Install() {

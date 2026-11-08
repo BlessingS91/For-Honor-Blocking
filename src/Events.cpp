@@ -5,6 +5,8 @@
 #include <cmath>
 #include <cstdint>
 
+#include "PowerAttackKey.h"
+
 namespace {
     using namespace std::chrono_literals;
 
@@ -119,6 +121,10 @@ namespace FHB {
         }
 
         const auto& tag = a_event->tag;
+
+        if (actor->IsPlayerRef()) {
+            PowerAttackKey::OnPlayerAnimationEvent(tag.c_str());
+        }
 
         if (tag == "weaponSwing" && !actor->IsPlayerRef()) {
             auto* race = actor->GetRace();
