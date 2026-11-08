@@ -6,6 +6,7 @@
 #include <utility>
 
 #include "DirectionalHandler.h"
+#include "Events.h"
 #include "Gameplay.h"
 #include "Parry.h"
 #include "PoiseAPI.h"
@@ -30,6 +31,30 @@ namespace Blocking {
     }
 
     namespace {
+
+        float GetAllBlockReduction(RE::Actor* defender, bool powerAttack) {
+            const auto* actorValues = defender->AsActorValueOwner();
+
+            const float blockSkill = std::clamp(actorValues->GetActorValue(RE::ActorValue::kBlock), 0.0f, 100.0f);
+
+            float shieldArmor = 0.0f;
+
+            if (auto* equipped = defender->GetEquippedObject(true)) {
+                if (auto* shield = equipped->As<RE::TESObjectARMO>()) {
+                    shieldArmor = shield->GetArmorRating();
+                }
+            }
+
+            float blockedPercent = 45.0f + 0.2f * shieldArmor * (1.0f + blockSkill * 0.015f);
+
+            blockedPercent = std::min(blockedPercent, 85.0f);
+
+            if (powerAttack) {
+                blockedPercent *= 0.66f;
+            }
+
+            return std::clamp(blockedPercent / 100.0f, 0.0f, 0.85f);
+        }
 
         float GetBlockStaminaCost(RE::Actor* a_attacker) {
             if (!a_attacker) {
@@ -103,12 +128,41 @@ namespace Blocking {
 
             auto* aggressor = hitData.attacker;
             auto* defender = hitData.target ? hitData.target->As<RE::Actor>() : nullptr;
+
             if (!aggressor || !defender) {
                 return result;
             }
 
             std::int32_t parryWindow = 0;
-            if (defender->GetGraphVariableInt("ParryFHB", parryWindow) && parryWindow == 1) {
+            std::int32_t parryState = 0;
+            std::int32_t parrySuccess = 0;
+
+            const bool defenderParrying =
+                defender->GetGraphVariableInt("ParryWindowFHB", parryWindow) && parryWindow == 1;
+
+            const bool stateRead = aggressor->GetGraphVariableInt("ParryActiveFHB", parryState);
+
+            const bool successRead = aggressor->GetGraphVariableInt("ParrySuccessFHB", parrySuccess);
+
+            const bool attackerParrying = stateRead && parryState == 1;
+
+            const bool attackerCounterattacking = aggressor->IsPlayerRef() && successRead && parrySuccess == 1;
+
+            if (Settings::debugLogging) {
+                logger::info(
+                    "[PARRY ROUTE] Attacker={} Defender={} "
+                    "StateRead={} State={} SuccessRead={} Success={} DefenderWindow={}",
+                    aggressor->GetName(), defender->GetName(), stateRead, parryState, successRead, parrySuccess,
+                    parryWindow);
+            }
+
+            std::int32_t defenderParrySuccess = 0;
+
+            const bool defenderParryProtected =
+                defender->IsPlayerRef() && defender->GetGraphVariableInt("ParrySuccessFHB", defenderParrySuccess) &&
+                defenderParrySuccess == 1;
+
+            if (defenderParrying || defenderParryProtected || attackerParrying || attackerCounterattacking) {
                 return Parry::OnPreHit(hitData);
             }
 
@@ -135,6 +189,16 @@ namespace Blocking {
             const bool gotBlockDirection = defender->GetGraphVariableInt("CameraMovementFHB", blockDirection);
             aggressor->GetGraphVariableInt("UnblockableFHB", unblockable);
 
+            // Unblockable attack connects with an active guard.
+            if (unblockable == 1) {
+                FHB::Events::ActivateGuardBroken(defender);
+
+                if (Settings::debugLogging) {
+                    logger::info("[GUARD BREAK] Attacker={} | Defender={} | GuardBrokenFHB=1", aggressor->GetName(),
+                                 defender->GetName());
+                }
+            }
+
             if (!gotAttackDirection || (!gotBlockDirection && allBlock != 1)) {
                 if (Settings::debugLogging) {
                     logger::info(
@@ -155,9 +219,14 @@ namespace Blocking {
                 DirectionalHandler::IsSuccessfulBlock(attackDirection, blockDirection, allBlock == 1, unblockable == 1);
             const bool powerAttack = aggressor->IsPowerAttacking();
 
+            const auto* actorValueOwner = defender->AsActorValueOwner();
+            const float blockSkillLevel =
+                actorValueOwner ? actorValueOwner->GetActorValue(RE::ActorValue::kBlock) : 0.0f;
+
             const float baseCost = GetBlockStaminaCost(aggressor);
-            const float staminaReduction = successful ? (Settings::blockSkillLevel / 100.0f) * 50.0f : 0.0f;
+            const float staminaReduction = successful ? (blockSkillLevel / 100.0f) * 50.0f : 0.0f;
             const float staminaMultiplier = 1.0f - (staminaReduction / 100.0f);
+
             const float attackMultiplier = powerAttack ? 2.0f : 1.0f;
             const float staminaCost = baseCost * attackMultiplier * staminaMultiplier;
 
@@ -180,29 +249,41 @@ namespace Blocking {
 
             Gameplay::ApplyBlockSpells(aggressor, defender, powerAttack);
 
-            const float reduction = Settings::blockSkillLevel * (powerAttack ? Settings::powerAttackReductionPerLevel
-                                                                             : Settings::lightAttackReductionPerLevel);
-            const float damageMultiplier = std::max(0.0f, 1.0f - (reduction / 100.0f));
+            const float reduction = blockSkillLevel * (powerAttack ? Settings::powerAttackReductionPerLevel
+                                                                   : Settings::lightAttackReductionPerLevel);
+            const float fhbMultiplier = std::max(0.0f, 1.0f - (reduction / 100.0f));
+
+            float damageMultiplier = fhbMultiplier;
+
+            if (allBlock == 1 && !defender->IsBlocking()) {
+                const float vanillaReduction = GetAllBlockReduction(defender, powerAttack);
+
+                damageMultiplier *= (1.0f - vanillaReduction);
+            }
 
             result.modifiers.push_back({PRECISION_API::PreHitModifier::ModifierType::Damage,
                                         PRECISION_API::PreHitModifier::ModifierOperation::Multiplicative,
                                         damageMultiplier});
+
             result.modifiers.push_back({PRECISION_API::PreHitModifier::ModifierType::Stagger,
                                         PRECISION_API::PreHitModifier::ModifierOperation::Multiplicative,
-                                        damageMultiplier});
+                                        fhbMultiplier});
 
             if (powerAttack) {
                 if (Settings::debugLogging) {
                     logger::info(
                         "PRECISION BLOCK | Successful POWER block | BlockSkill={} | Reduction={} | "
                         "Damage/Stagger multiplier={} | Attacker Stagger={} | Defender Stagger={}",
-                        Settings::blockSkillLevel, reduction, damageMultiplier, Settings::powerAttackerStagger,
+                        blockSkillLevel, reduction, damageMultiplier, Settings::powerAttackerStagger,
                         Settings::powerDefenderStagger);
                 }
                 return result;
             }
 
-            const bool useLargeStagger = !Settings::empoweredBlockRequired || Settings::hasEmpoweredBlock;
+            auto* empoweredBlockPerk = RE::TESForm::LookupByEditorID<RE::BGSPerk>("HBLOCK_EmpoweredBlock");
+            const bool hasEmpoweredBlock = empoweredBlockPerk && defender->HasPerk(empoweredBlockPerk);
+
+            const bool useLargeStagger = !Settings::empoweredBlockRequired || hasEmpoweredBlock;
             if (useLargeStagger) {
                 Gameplay::ApplyLargeStagger(aggressor, defender);
             } else {
@@ -213,7 +294,7 @@ namespace Blocking {
                 logger::info(
                     "PRECISION BLOCK | Successful LIGHT block | BlockSkill={} | Reduction={} | "
                     "Damage/Stagger multiplier={} | Attacker Stagger={} | Defender Stagger={} | Recoil={}",
-                    Settings::blockSkillLevel, reduction, damageMultiplier, Settings::lightAttackerStagger,
+                    blockSkillLevel, reduction, damageMultiplier, Settings::lightAttackerStagger,
                     Settings::lightDefenderStagger, useLargeStagger ? "LARGE" : "NORMAL");
             }
             return result;
@@ -247,10 +328,14 @@ namespace Blocking {
             return damage;
         }
 
+        const auto* actorValueOwner = target->AsActorValueOwner();
+        const float blockSkillLevel = actorValueOwner ? actorValueOwner->GetActorValue(RE::ActorValue::kBlock) : 0.0f;
+
         const bool powerAttack = attacker->IsPowerAttacking();
-        const float reduction = Settings::blockSkillLevel * (powerAttack ? Settings::powerAttackReductionPerLevel
-                                                                         : Settings::lightAttackReductionPerLevel);
+        const float reduction = blockSkillLevel * (powerAttack ? Settings::powerAttackReductionPerLevel
+                                                               : Settings::lightAttackReductionPerLevel);
         const float damageMultiplier = std::max(0.0f, 1.0f - (reduction / 100.0f));
+
         const float result = damage * damageMultiplier;
 
         if (Settings::debugLogging) {

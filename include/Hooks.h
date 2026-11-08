@@ -1,18 +1,19 @@
 #pragma once
 
-#include "RE/M/MenuOpenCloseEvent.h"
+#include "RE/Skyrim.h"
+#include "REL/Relocation.h"
+#include "SKSE/SKSE.h"
 
-namespace Hooks {
-    inline float blockSkillLevel{0.0f};
+namespace Hooks
+{
+    void Install();
 
-    class MenuOpenCloseHandler final : public RE::BSTEventSink<RE::MenuOpenCloseEvent> {
-    public:
-        static MenuOpenCloseHandler* GetSingleton();
+    struct InputHook
+    {
+        static void thunk(
+            RE::BSTEventSource<RE::InputEvent*>* a_dispatcher,
+            RE::InputEvent* const* a_events);
 
-        RE::BSEventNotifyControl ProcessEvent(const RE::MenuOpenCloseEvent* event,
-                                              RE::BSTEventSource<RE::MenuOpenCloseEvent>* eventSource) override;
+        static inline REL::Relocation<decltype(thunk)> func;
     };
-
-    void Register();
-    void UpdatePlayerState();
 }

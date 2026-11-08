@@ -1,8 +1,11 @@
+
 #pragma once
 
 #include "RE/A/Actor.h"
 
 namespace Gameplay {
+
+    void AssignPlayerPerks();
 
     void ApplyNormalStagger(RE::Actor* aggressor, RE::Actor* defender);
 

@@ -44,10 +44,9 @@ namespace Gameplay {
             return;
         }
 
-        constexpr const char* lightEffects[] = {"HBLOCK_SekiroSSparks", "HBLOCK_SekiroSSparksPhysics",
-                                                "HBLOCK_SekiroSFlash", "HBLOCK_SekiroSFlashShield"};
+        constexpr const char* lightEffects[] = {"HBLOCK_SekiroSSparks", "HBLOCK_SekiroSSparksPhysics"};
 
-        constexpr const char* heavyEffects[] = {"HBLOCK_SekiroSFlash", "HBLOCK_SekiroSFlashShield"};
+        constexpr const char* heavyEffects[] = {"HBLOCK_SekiroSSparks", "HBLOCK_SekiroSSparksPhysics"};
 
         const bool useHeavyEffects = powerAttack || !largeRecoil;
 
@@ -138,10 +137,46 @@ namespace Gameplay {
             Cast_Spell(defender, "HBLOCK_BlockedNormalDefender", Settings::lightDefenderStagger);
         }
 
-        Cast_Spell(defender, "HBLOCK_Effects", powerAttack ? 0.50f : 0.50f);
+        if (auto* dataHandler = RE::TESDataHandler::GetSingleton()) {
+            if (auto* timeSlow = dataHandler->LookupForm<RE::SpellItem>(0x80C, "For Honor Blocking.esp")) {
+                if (auto* caster = defender->GetMagicCaster(RE::MagicSystem::CastingSource::kInstant)) {
+                    caster->CastSpellImmediate(timeSlow, false, defender, 1.0f, false, 0.0f, defender);
+
+                    if (Settings::debugLogging) {
+                        logger::info("PRECISION BLOCK | TimeSlow_FHB cast on {}", defender->GetName());
+                    }
+                }
+            } else {
+                logger::warn("PRECISION BLOCK | TimeSlow_FHB not found");
+            }
+        }
 
         const bool largeRecoil = !powerAttack && (!Settings::empoweredBlockRequired || Settings::hasEmpoweredBlock);
 
         SpawnBlockEffects(defender, powerAttack, largeRecoil);
+    }
+
+    void AssignPlayerPerks() {
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        if (!player) {
+            logger::warn("[FHB] Player unavailable for perk assignment");
+            return;
+        }
+
+        constexpr const char* perkEditorIDs[] = {"FHB_ParryPerk", "FHB_UnblockablePerk"};
+
+        for (const auto* editorID : perkEditorIDs) {
+            auto* perk = RE::TESForm::LookupByEditorID<RE::BGSPerk>(editorID);
+
+            if (!perk) {
+                logger::warn("[FHB] Perk not found: {}", editorID);
+                continue;
+            }
+
+            if (!player->HasPerk(perk)) {
+                player->AddPerk(perk);
+                logger::info("[FHB] {} added to player", editorID);
+            }
+        }
     }
 }

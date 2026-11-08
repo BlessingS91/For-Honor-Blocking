@@ -1,8 +1,10 @@
+
 #include "Parry.h"
 
 #include <cstdint>
 
 #include "DirectionalHandler.h"
+#include "Events.h"
 #include "Gameplay.h"
 #include "Settings.h"
 #include "logger.h"
@@ -17,11 +19,58 @@ namespace Parry {
         if (!aggressor || !defender) {
             return result;
         }
+        // Apply knockdown condition to the target of a successful parry counterattack.
+        std::int32_t counterParrySuccess = 0;
 
-        // Parry window must be active.
+        if (aggressor->IsPlayerRef() && aggressor->GetGraphVariableInt("ParrySuccessFHB", counterParrySuccess) &&
+            counterParrySuccess == 1) {
+            FHB::Events::ActivateParryKnockdown(defender);
+        }
+
+        // Check whether a parry attack connected without succeeding.
+        std::int32_t parryState = 0;
+        std::int32_t parrySuccess = 0;
+
+        const bool gotParryState = aggressor->GetGraphVariableInt("ParryActiveFHB", parryState);
+
+        const bool gotParrySuccess = aggressor->GetGraphVariableInt("ParrySuccessFHB", parrySuccess);
+
+        if (gotParryState && gotParrySuccess && parryState == 1 && parrySuccess == 0) {
+            result.bIgnoreHit = true;
+
+            Gameplay::ApplyNormalStagger(aggressor, defender);
+
+            if (Settings::debugLogging) {
+                logger::info("[PARRY HIT] Failed parry | Attacker={} | Target={} | Normal recoil applied",
+                             aggressor->GetName(), defender->GetName());
+            }
+
+            return result;
+        }
+
+        // Additional incoming attacks recoil during successful parry state.
+        std::int32_t defenderParrySuccess = 0;
+        std::int32_t unblockable = 0;
+
+        aggressor->GetGraphVariableInt("UnblockableFHB", unblockable);
+
+        if (defender->IsPlayerRef() && defender->GetGraphVariableInt("ParrySuccessFHB", defenderParrySuccess) &&
+            defenderParrySuccess == 1 && !aggressor->IsPlayerRef()) {
+            // Unblockable attacks bypass successful-parry protection.
+            if (unblockable == 1) {
+                return result;
+            }
+
+            result.bIgnoreHit = true;
+            Gameplay::ApplyLargeStagger(aggressor, defender);
+
+            return result;
+        }
+
+        // Parry window must be active on the defender.
         std::int32_t parryWindow = 0;
 
-        if (!defender->GetGraphVariableInt("ParryFHB", parryWindow) || parryWindow != 1) {
+        if (!defender->GetGraphVariableInt("ParryWindowFHB", parryWindow) || parryWindow != 1) {
             return result;
         }
 
@@ -43,7 +92,8 @@ namespace Parry {
         }
 
         // Same directional comparison used by Blocking.cpp.
-        const bool successful = DirectionalHandler::IsSuccessfulBlock(attackDirection, parryDirection);
+        const bool successful =
+            unblockable != 1 && DirectionalHandler::IsSuccessfulBlock(attackDirection, parryDirection);
 
         if (Settings::debugLogging) {
             logger::info(
@@ -55,31 +105,43 @@ namespace Parry {
         }
 
         if (!successful) {
+            // Directional parry failed. Allow normal hit processing.
             return result;
         }
-
-        const bool powerAttack = aggressor->IsPowerAttacking();
-
-        auto* spell =
-            RE::TESDataHandler::GetSingleton()->LookupForm<RE::SpellItem>(0x803, "For Honor Balance Patch.esp");
-
-        if (spell) {
-            if (auto* caster = defender->GetMagicCaster(RE::MagicSystem::CastingSource::kInstant)) {
-                caster->CastSpellImmediate(spell, false, defender, 1, false, 0.0f, defender);
+        // Successful parry: activate success state.
+        if (defender->SetGraphVariableInt("ParrySuccessFHB", 1)) {
+            if (Settings::debugLogging) {
+                logger::info("[PARRY] ParrySuccessFHB = 1 | Actor={}", defender->GetName());
             }
+        } else {
+            logger::warn("[PARRY] Failed to set ParrySuccessFHB | Actor={}", defender->GetName());
         }
 
-        // Apply existing block spells, sparks, and flashes.
-        Gameplay::ApplyBlockSpells(aggressor, defender, powerAttack);
-
-        // Force large recoil on the attacker.
+        // Ignore incoming hit, stagger the attacker, and play block effects.
+        result.bIgnoreHit = true;
         Gameplay::ApplyLargeStagger(aggressor, defender);
+        Gameplay::SpawnBlockEffects(defender, false, true);
 
-        if (Settings::debugLogging) {
-            logger::info(
-                "[PARRY] SUCCESS | Attacker={} | Defender={} | "
-                "AttackDirection={} | ParryDirection={} | Recoil=LARGE",
-                aggressor->GetName(), defender->GetName(), attackDirection, parryDirection);
+        // Apply successful parry spells when the player parries an NPC.
+        if (defender == RE::PlayerCharacter::GetSingleton() && aggressor != RE::PlayerCharacter::GetSingleton()) {
+            auto* dataHandler = RE::TESDataHandler::GetSingleton();
+
+            const auto* timeSlow = dataHandler->LookupForm<RE::SpellItem>(0x80C, "For Honor Blocking.esp");
+
+            if (auto* caster = defender->GetMagicCaster(RE::MagicSystem::CastingSource::kInstant)) {
+                if (timeSlow) {
+                    caster->CastSpellImmediate(const_cast<RE::SpellItem*>(timeSlow), false, defender, 1.0f, false, 0.0f,
+                                               defender);
+                } else {
+                    logger::warn("[PARRY] Spell not found: TimeSlow_FHB");
+                }
+
+                if (Settings::debugLogging) {
+                    logger::info("[PARRY] Successful parry spells triggered | NPC={}", aggressor->GetName());
+                }
+            } else {
+                logger::warn("[PARRY] Player instant magic caster unavailable");
+            }
         }
 
         return result;

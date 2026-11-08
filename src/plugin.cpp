@@ -1,10 +1,13 @@
+#include "BlockBehavior.h"
 #include "Blocking.h"
 #include "Events.h"
 #include "FormCache.h"
+#include "Gameplay.h"
 #include "Hooks.h"
 #include "Menu.h"
 #include "Parry.h"
 #include "Settings.h"
+#include "WeaponClash.h"
 #include "logger.h"
 
 void OnMessage(SKSE::MessagingInterface::Message* message) {
@@ -17,9 +20,14 @@ void OnMessage(SKSE::MessagingInterface::Message* message) {
             logger::info("Data loaded - loading For Honor Blocking settings");
             Settings::Load();
             FormCache::LoadForms();
+            MCO::InstallHooks();
 
             const auto pluginHandle = SKSE::GetPluginHandle();
-            auto* precisionAPI = PRECISION_API::RequestPluginAPI();
+            auto* precisionAPI = static_cast<PRECISION_API::IVPrecision2*>(
+                PRECISION_API::RequestPluginAPI(PRECISION_API::InterfaceVersion::V2));
+
+            Blocking::Install(pluginHandle, precisionAPI);
+            WeaponClash::Install(pluginHandle, precisionAPI);
 
             Blocking::Install(pluginHandle, static_cast<PRECISION_API::IVPrecision1*>(precisionAPI));
 
@@ -35,8 +43,8 @@ void OnMessage(SKSE::MessagingInterface::Message* message) {
 
         case SKSE::MessagingInterface::kNewGame:
         case SKSE::MessagingInterface::kPostLoadGame: {
-            Hooks::Register();
-            logger::info("Player world loaded - hooks registered");
+            MCO::GetSingleton()->RegisterAnimationSink();
+            Gameplay::AssignPlayerPerks();
             break;
         }
 

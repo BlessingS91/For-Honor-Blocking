@@ -7,6 +7,8 @@ namespace FHB {
     class Events {
     public:
         static void AddEventSink();
+        static void ActivateParryKnockdown(RE::Actor* actor);
+        static void ActivateGuardBroken(RE::Actor* actor);
 
     private:
         static RE::BSEventNotifyControl ProcessEvent(RE::BSTEventSink<RE::BSAnimationGraphEvent>* a_this,

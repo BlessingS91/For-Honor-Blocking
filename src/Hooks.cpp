@@ -1,82 +1,97 @@
+
 #include "Hooks.h"
 
-#include "RE/U/UI.h"
-#include "SKSE/SKSE.h"
-#include "Settings.h"
-#include "logger.h"
-
 namespace Hooks {
+    namespace {
+        bool interceptingAttack = false;
 
-    MenuOpenCloseHandler* MenuOpenCloseHandler::GetSingleton() {
-        static MenuOpenCloseHandler singleton;
+        bool ProcessButton(RE::ButtonEvent* a_button) {
+            if (!a_button) {
+                return false;
+            }
 
-        return &singleton;
-    }
-
-    void UpdatePlayerState() {
-        SKSE::GetTaskInterface()->AddTask([]() {
+            auto* userEvents = RE::UserEvents::GetSingleton();
             auto* player = RE::PlayerCharacter::GetSingleton();
 
-            if (!player) {
-                return;
+            if (!userEvents || !player) {
+                return false;
             }
 
-            auto* actorValueOwner = player->AsActorValueOwner();
+            const auto& control = a_button->QUserEvent();
 
-            if (!actorValueOwner) {
-                return;
+            if (control != userEvents->rightAttack) {
+                return false;
             }
 
-            Settings::blockSkillLevel = actorValueOwner->GetActorValue(RE::ActorValue::kBlock);
+            if (a_button->IsDown() && player->IsBlocking()) {
+                const bool setBlocking = player->SetGraphVariableBool("IsBlocking", false);
 
-            auto* empoweredBlockPerk = RE::TESForm::LookupByEditorID<RE::BGSPerk>("HBLOCK_EmpoweredBlock");
+                const bool setBashing = player->SetGraphVariableBool("IsBashing", false);
 
-            Settings::hasEmpoweredBlock = empoweredBlockPerk && player->HasPerk(empoweredBlockPerk);
+                const bool setWantBlock = player->SetGraphVariableInt("iWantBlock", 0);
 
-            if (Settings::debugLogging) {
-                logger::info("PLAYER UPDATE | Block skill level={} | Empowered Block={}", Settings::blockSkillLevel,
-                             Settings::hasEmpoweredBlock ? "YES" : "NO");
+                const bool blockStopped = player->NotifyAnimationGraph("blockStop");
+
+                logger::info(
+                    "[BashAttackTest] Block cancelled | "
+                    "IsBlocking={} IsBashing={} iWantBlock={} "
+                    "blockStop={} engineBlocking={}",
+                    setBlocking, setBashing, setWantBlock, blockStopped, player->IsBlocking());
             }
-        });
+
+            // Never suppress the input.
+            // Skyrim receives the original press, hold, and release.
+            return false;
+        }
     }
 
-    RE::BSEventNotifyControl MenuOpenCloseHandler::ProcessEvent(const RE::MenuOpenCloseEvent* event,
-                                                                RE::BSTEventSource<RE::MenuOpenCloseEvent>*) {
-        if (!event) {
-            return RE::BSEventNotifyControl::kContinue;
-        }
-
-        if (!event->opening) {
-            return RE::BSEventNotifyControl::kContinue;
-        }
-
-        UpdatePlayerState();
-
-        return RE::BSEventNotifyControl::kContinue;
-    }
-
-    void Register() {
-        auto* ui = RE::UI::GetSingleton();
-
-        if (!ui) {
-            logger::error("Hooks | Failed to get RE::UI singleton for MenuOpenCloseEvent registration");
-
+    void InputHook::thunk(RE::BSTEventSource<RE::InputEvent*>* a_dispatcher, RE::InputEvent* const* a_events) {
+        if (!a_dispatcher || !a_events) {
             return;
         }
 
-        auto* eventSource = ui->GetEventSource<RE::MenuOpenCloseEvent>();
+        RE::InputEvent* first = nullptr;
+        RE::InputEvent* last = nullptr;
 
-        if (!eventSource) {
-            logger::error("Hooks | Failed to get MenuOpenCloseEvent event source");
+        for (auto* event = *a_events; event;) {
+            auto* next = event->next;
 
-            return;
+            bool suppress = false;
+
+            if (auto* button = event->AsButtonEvent()) {
+                suppress = ProcessButton(button);
+            }
+
+            if (!suppress) {
+                if (!first) {
+                    first = event;
+                } else {
+                    last->next = event;
+                }
+
+                last = event;
+            }
+
+            event = next;
         }
 
-        eventSource->AddEventSink(MenuOpenCloseHandler::GetSingleton());
+        if (last) {
+            last->next = nullptr;
+        }
 
-        logger::info("Hooks | MenuOpenCloseEvent registered successfully");
-
-        UpdatePlayerState();
+        RE::InputEvent* const forwarded[] = {first};
+        func(a_dispatcher, forwarded);
     }
 
+    void Install() {
+        auto& trampoline = SKSE::GetTrampoline();
+        trampoline.create(14);
+
+        // Original No Loot While Armed call site.
+        const REL::Relocation<std::uintptr_t> target{REL::RelocationID(67315, 68617)};
+
+        InputHook::func = trampoline.write_call<5>(target.address() + 0x7B, InputHook::thunk);
+
+        logger::info("[BashAttackTest] Bash-to-attack test hook installed");
+    }
 }
