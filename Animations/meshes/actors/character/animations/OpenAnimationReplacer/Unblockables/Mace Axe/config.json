@@ -1,0 +1,114 @@
+{
+    "name": "dual wield extra",
+    "priority": 10022002,
+    "conditions": [
+        {
+            "condition": "CompareValues",
+            "requiredVersion": "1.0.0.0",
+            "Value A": {
+                "graphVariable": "FHB_BlockPowerAttack",
+                "graphVariableType": "Int"
+            },
+            "Comparison": "==",
+            "Value B": {
+                "value": 1.0
+            }
+        },
+        {
+            "condition": "OR",
+            "requiredVersion": "1.0.0.0",
+            "Conditions": [
+                {
+                    "condition": "IsEquippedType",
+                    "requiredVersion": "1.0.0.0",
+                    "Type": {
+                        "value": 4.0
+                    },
+                    "Left hand": false
+                },
+                {
+                    "condition": "IsEquippedType",
+                    "requiredVersion": "1.0.0.0",
+                    "Type": {
+                        "value": 3.0
+                    },
+                    "Left hand": false
+                },
+                {
+                    "condition": "IsEquippedType",
+                    "requiredVersion": "1.0.0.0",
+                    "Type": {
+                        "value": 1.0
+                    },
+                    "Left hand": false
+                },
+                {
+                    "condition": "IsEquippedType",
+                    "requiredVersion": "1.0.0.0",
+                    "Type": {
+                        "value": 2.0
+                    },
+                    "Left hand": false
+                }
+            ]
+        },
+        {
+            "condition": "OR",
+            "requiredVersion": "1.0.0.0",
+            "Conditions": [
+                {
+                    "condition": "IsEquippedType",
+                    "requiredVersion": "1.0.0.0",
+                    "Type": {
+                        "value": 4.0
+                    },
+                    "Left hand": true
+                },
+                {
+                    "condition": "IsEquippedType",
+                    "requiredVersion": "1.0.0.0",
+                    "Type": {
+                        "value": 3.0
+                    },
+                    "Left hand": true
+                },
+                {
+                    "condition": "IsEquippedType",
+                    "requiredVersion": "1.0.0.0",
+                    "Type": {
+                        "value": 1.0
+                    },
+                    "Left hand": true
+                },
+                {
+                    "condition": "IsEquippedType",
+                    "requiredVersion": "1.0.0.0",
+                    "Type": {
+                        "value": 2.0
+                    },
+                    "Left hand": true
+                }
+            ]
+        },
+        {
+            "condition": "IsActorBase",
+            "requiredVersion": "1.0.0.0",
+            "Actor base": {
+                "pluginName": "Skyrim.esm",
+                "formID": "7"
+            }
+        },
+        {
+            "condition": "CompareValues",
+            "requiredVersion": "1.0.0.0",
+            "Value A": {
+                "value": 5.0
+            },
+            "Comparison": "==",
+            "Value B": {
+                "graphVariable": "DirecionalCycleMoveset",
+                "graphVariableType": "Int"
+            }
+        }
+    ]
+}

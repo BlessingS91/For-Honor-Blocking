@@ -9,6 +9,7 @@
 #include "Parry.h"
 #include "PowerAttackKey.h"
 #include "Settings.h"
+#include "TDMLockBridge.h"
 #include "WeaponClash.h"
 #include "logger.h"
 
@@ -42,6 +43,7 @@ void OnMessage(SKSE::MessagingInterface::Message* message) {
             // Register SPA before SimpleBlock so its power-attack input callback
             // can consume the power chord before BlockKey handles regular blocking.
             PowerAttackKey::OnDataLoaded();
+            TDMLockBridge::Initialize();
             BlockKey::OnDataLoaded();
 
             FHB::Events::AddEventSink();

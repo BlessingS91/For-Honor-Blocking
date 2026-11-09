@@ -1,0 +1,16 @@
+{
+    "name": "HitDown Random 1",
+    "priority": 9990001,
+    "replaceOnEcho": true,
+    "conditions": [
+        {
+            "condition": "HasMagicEffect",
+            "requiredVersion": "1.0.0.0",
+            "Magic effect": {
+                "pluginName": "For Honor in Skyrim.esp",
+                "formID": "85A"
+            },
+            "Active effects only": false
+        }
+    ]
+}

@@ -1,0 +1,46 @@
+{
+    "name": "Shield Unblockable",
+    "priority": 80710210,
+    "conditions": [
+        {
+            "condition": "IsEquippedType",
+            "requiredVersion": "1.0.0.0",
+            "Type": {
+                "value": 11.0
+            },
+            "Left hand": true
+        },
+        {
+            "condition": "CompareValues",
+            "requiredVersion": "1.0.0.0",
+            "Value A": {
+                "graphVariable": "FHB_BlockPowerAttack",
+                "graphVariableType": "Int"
+            },
+            "Comparison": "==",
+            "Value B": {
+                "value": 1.0
+            }
+        },
+        {
+            "condition": "IsActorBase",
+            "requiredVersion": "1.0.0.0",
+            "Actor base": {
+                "pluginName": "Skyrim.esm",
+                "formID": "7"
+            }
+        },
+        {
+            "condition": "CompareValues",
+            "requiredVersion": "1.0.0.0",
+            "Value A": {
+                "value": 5.0
+            },
+            "Comparison": "==",
+            "Value B": {
+                "graphVariable": "DirecionalCycleMoveset",
+                "graphVariableType": "Int"
+            }
+        }
+    ]
+}

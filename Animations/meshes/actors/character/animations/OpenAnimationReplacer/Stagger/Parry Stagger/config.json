@@ -1,0 +1,29 @@
+{
+    "name": "Parry Stagger",
+    "priority": 900000001,
+    "replaceOnEcho": true,
+    "conditions": [
+        {
+            "condition": "HasMagicEffect",
+            "requiredVersion": "1.0.0.0",
+            "negated": true,
+            "Magic effect": {
+                "pluginName": "For Honor Balance Patch.esp",
+                "formID": "86F"
+            },
+            "Active effects only": false
+        },
+        {
+            "condition": "CompareValues",
+            "requiredVersion": "1.0.0.0",
+            "Value A": {
+                "graphVariable": "ParryKnockdownFHB",
+                "graphVariableType": "Int"
+            },
+            "Comparison": "==",
+            "Value B": {
+                "value": 1.0
+            }
+        }
+    ]
+}

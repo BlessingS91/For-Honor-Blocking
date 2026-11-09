@@ -1,0 +1,26 @@
+{
+    "name": "FHB Shield All Block",
+    "priority": 100260000,
+    "conditions": [
+        {
+            "condition": "IsEquippedType",
+            "requiredVersion": "1.0.0.0",
+            "Type": {
+                "value": 11.0
+            },
+            "Left hand": true
+        },
+        {
+            "condition": "CompareValues",
+            "requiredVersion": "1.0.0.0",
+            "Value A": {
+                "graphVariable": "FHB_BlockPowerAttack",
+                "graphVariableType": "Int"
+            },
+            "Comparison": "==",
+            "Value B": {
+                "value": 1.0
+            }
+        }
+    ]
+}
