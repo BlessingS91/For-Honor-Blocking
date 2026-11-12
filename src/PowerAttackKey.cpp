@@ -5,10 +5,13 @@
 #include <spdlog/sinks/basic_file_sink.h>
 #include <spdlog/sinks/msvc_sink.h>
 
-#include <string_view>
 #include <algorithm>
 #include <cmath>
+#include <string_view>
 
+#include "AttackPosition.h"
+#include "InputTracking.h"
+#include "Prisma.h"
 #include "RE/S/ScriptEventSourceHolder.h"
 #include "RE/T/TESHitEvent.h"
 #include "SKSE/InputMap.h"
@@ -70,6 +73,10 @@ namespace {
     BGSAction* g_dualPowerAttackAction = nullptr;
     BGSAction* g_rightAttackAction = nullptr;
     BGSAction* g_leftAttackAction = nullptr;
+    // ============================================================================
+    // POWER ATTACK SETTINGS: active values and pending changes from the menu.
+    // These bindings and options are saved to SimplePowerAttack.ini.
+    // ============================================================================
     std::atomic<uint32_t> g_altPowerAttackKey = kDefaultAltPowerAttackKey;
     uint32_t g_pendingAltPowerAttackKey = kDefaultAltPowerAttackKey;
     bool g_hasUnsavedKeyChange = false;
@@ -115,6 +122,7 @@ namespace {
     std::atomic<bool> g_pluginEnabled = true;
     bool g_pendingPluginEnabled = true;
     bool g_hasUnsavedEnabledChange = false;
+    // ========================== END POWER ATTACK SETTINGS ==========================
     SKSEMenuFramework::Model::InputEvent* g_menuFrameworkInputHook = nullptr;
     SKSEMenuFramework::Model::Event* g_menuFrameworkEventHook = nullptr;
     std::atomic<CaptureTarget> g_captureTarget = CaptureTarget::kNone;
@@ -169,7 +177,7 @@ namespace {
     bool IsDirectlyBackward(PlayerCharacter* player) {
         if (!player) return false;
         std::int32_t direction = 0;
-        return player->GetGraphVariableInt("DirecionalCycleMoveset", direction) && direction == 5;
+        return player->GetGraphVariableInt("CameraMovementFHB", direction) && direction == 0;
     }
 
     void ResetFromBlockAttack(PlayerCharacter* player, const char* /*reason*/) {
@@ -626,8 +634,7 @@ namespace {
         if (phase != 1) return;  // Phase 2 owns its queued dispatch task.
         const unsigned frames = g_lightBlockAttackTicks.fetch_add(1, std::memory_order_relaxed) + 1;
         const auto* state = player->AsActorState();
-        if (!state || !g_pluginEnabled.load() || !IsGameplayInputAllowed() ||
-            !IsPlayerInValidCombatState(player) ||
+        if (!state || !g_pluginEnabled.load() || !IsGameplayInputAllowed() || !IsPlayerInValidCombatState(player) ||
             GetTickCount64() >= g_lightBlockAttackDeadline.load()) {
             ResetLightAttackTransition(player, "normal light block exit failed or cancelled");
             return;
@@ -649,16 +656,16 @@ namespace {
         g_task->AddTask([player, lightAction, generation]() {
             if (player != PlayerCharacter::GetSingleton() ||
                 generation != g_attackCancelGeneration.load(std::memory_order_acquire) ||
-                g_lightBlockAttackPhase.load(std::memory_order_acquire) != 2) return;
+                g_lightBlockAttackPhase.load(std::memory_order_acquire) != 2)
+                return;
 
             bool graphBlockingNow = false;
             const bool hasGraphBlockingNow = player->GetGraphVariableBool("IsBlocking", graphBlockingNow);
             const auto* currentState = player->AsActorState();
-            const bool blockedAgain = player->IsBlocking() ||
-                (hasGraphBlockingNow && graphBlockingNow) ||
-                (currentState && currentState->actorState2.wantBlocking);
-            if (!lightAction || blockedAgain || !g_pluginEnabled.load() ||
-                !IsGameplayInputAllowed() || !IsPlayerInValidCombatState(player)) {
+            const bool blockedAgain = player->IsBlocking() || (hasGraphBlockingNow && graphBlockingNow) ||
+                                      (currentState && currentState->actorState2.wantBlocking);
+            if (!lightAction || blockedAgain || !g_pluginEnabled.load() || !IsGameplayInputAllowed() ||
+                !IsPlayerInValidCombatState(player)) {
                 ResetLightAttackTransition(player, "normal light action cancelled before dispatch");
                 return;
             }
@@ -988,14 +995,22 @@ namespace {
             AdvanceLightAttackTransition(player);
             ExpireFromBlockAttack(player);
             TDMLockBridge::Update();
+            // Inactivity decay reuses this existing player update hook.
+            DirectionTracker::GetSingleton()->UpdateDecay();
+            // PLAYER HUD: read the player's graph state after input decay.
+            // NPC HUD remains independently driven by AttackPosition.
+            Prisma::UpdatePlayerHUD();
+            // NPC direction warnings: read NPC graph states and update PrismaUI.
+            // Reuses the existing update hook; no additional hook or dispatcher.
+            AttackPosition::GetSingleton()->UpdateHUD();
         }
         static inline Update_t _Update = nullptr;
     };
 
     bool SaveConfig(uint32_t keyCode, uint32_t leftKeyCode, uint32_t dualKeyCode, uint32_t rightGamepadKey,
                     uint32_t leftGamepadKey, uint32_t dualGamepadKey, uint32_t rightMod, uint32_t leftMod,
-                    uint32_t dualMod, bool mcoMode, bool noStaminaPA,
-                    float minimumPowerAttackStamina, bool pluginEnabled) {
+                    uint32_t dualMod, bool mcoMode, bool noStaminaPA, float minimumPowerAttackStamina,
+                    bool pluginEnabled) {
         keyCode = SanitizeKeyboardMouseKey(keyCode);
         leftKeyCode = SanitizeKeyboardMouseKey(leftKeyCode);
         dualKeyCode = SanitizeKeyboardMouseKey(dualKeyCode);
@@ -1020,8 +1035,8 @@ namespace {
         g_ini.SetBoolValue("MCO", "bMCOMode", mcoMode);
         g_ini.SetBoolValue("General", "bPowerAttackNoStamina", noStaminaPA);
         g_ini.SetDoubleValue("General", "fMinimumPowerAttackStamina",
-                             std::clamp(static_cast<double>(minimumPowerAttackStamina),
-                                        0.0, static_cast<double>(kMaxMinimumPowerAttackStamina)));
+                             std::clamp(static_cast<double>(minimumPowerAttackStamina), 0.0,
+                                        static_cast<double>(kMaxMinimumPowerAttackStamina)));
         try {
             std::filesystem::create_directories(savePath.parent_path());
         } catch (const std::exception& e) {
@@ -1224,6 +1239,10 @@ namespace {
         ImGuiMCP::SameLine(170.0f);
         DrawBindButton(idSuffix, target);
     }
+    // ============================================================================
+    // POWER ATTACK SETTINGS MENU - For Honor Blocking > Inputs
+    // All settings controls for this module are rendered here.
+    // ============================================================================
     void __stdcall RenderMenuFrameworkSection() {
         PollCaptureResult();
         ImGuiMCP::Text("FHB Power Attack - Dual Device Controls");
@@ -1260,10 +1279,11 @@ namespace {
             g_hasUnsavedNoStaminaChange = (g_pendingNoStaminaPowerAttack != g_noStaminaPowerAttack.load());
         }
         ImGuiMCP::Text("Power Attack Stamina Requirement");
-        ImGuiMCP::TextWrapped("Minimum stamina needed to start any power attack, including out of block. "
-                              "Set to 0 for no additional minimum. Does not change stamina consumption.");
-        if (ImGuiMCP::SliderFloat("Minimum Stamina Required", &g_pendingMinimumPowerAttackStamina,
-                                 0.0f, kMaxMinimumPowerAttackStamina, "%.0f")) {
+        ImGuiMCP::TextWrapped(
+            "Minimum stamina needed to start any power attack, including out of block. "
+            "Set to 0 for no additional minimum. Does not change stamina consumption.");
+        if (ImGuiMCP::SliderFloat("Minimum Stamina Required", &g_pendingMinimumPowerAttackStamina, 0.0f,
+                                  kMaxMinimumPowerAttackStamina, "%.0f")) {
             g_hasUnsavedMinimumPowerAttackStaminaChange =
                 (g_pendingMinimumPowerAttackStamina != g_minimumPowerAttackStamina.load());
         }
@@ -1294,8 +1314,8 @@ namespace {
             const uint32_t saveDMod = SanitizeUnifiedModifier(g_pendingDualModifier);
             const bool saveMco = g_pendingMcoMode;
             const bool saveNoStamina = g_pendingNoStaminaPowerAttack;
-            const float saveMinStamina = std::clamp(g_pendingMinimumPowerAttackStamina,
-                                                     0.0f, kMaxMinimumPowerAttackStamina);
+            const float saveMinStamina =
+                std::clamp(g_pendingMinimumPowerAttackStamina, 0.0f, kMaxMinimumPowerAttackStamina);
             const bool saveEnabled = g_pendingPluginEnabled;
             if (SaveConfig(saveCode, saveLeftCode, saveDualCode, saveRightGamepad, saveLeftGamepad, saveDualGamepad,
                            saveRMod, saveLMod, saveDMod, saveMco, saveNoStamina, saveMinStamina, saveEnabled)) {
@@ -1376,6 +1396,7 @@ namespace {
             LoadConfig();
         }
     }
+    // ======================== END POWER ATTACK SETTINGS MENU =======================
     void LoadConfig() {
         const std::filesystem::path path = GetPrimaryConfigPath();
         const SI_Error result = g_ini.LoadFile(path.c_str());
@@ -1492,8 +1513,8 @@ namespace {
         g_pendingNoStaminaPowerAttack = parsedNoStamina;
         g_hasUnsavedNoStaminaChange = false;
         const double rawMinimum = g_ini.GetDoubleValue("General", "fMinimumPowerAttackStamina", 0.0);
-        const float parsedMinimum = std::clamp(std::isfinite(rawMinimum) ? static_cast<float>(rawMinimum) : 0.0f,
-                                               0.0f, kMaxMinimumPowerAttackStamina);
+        const float parsedMinimum = std::clamp(std::isfinite(rawMinimum) ? static_cast<float>(rawMinimum) : 0.0f, 0.0f,
+                                               kMaxMinimumPowerAttackStamina);
         g_minimumPowerAttackStamina.store(parsedMinimum);
         g_pendingMinimumPowerAttackStamina = parsedMinimum;
         g_hasUnsavedMinimumPowerAttackStaminaChange = false;

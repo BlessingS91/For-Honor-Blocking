@@ -128,3 +128,38 @@ automaticGameFolderOutput(
     lorerim_mods_output
     lorerim3_mods_output
 )
+
+# ============================================================
+# PrismaUI - SolidJS Frontend
+# ============================================================
+
+find_program(NPM_EXECUTABLE NAMES npm.cmd npm REQUIRED)
+
+set(PRISMA_UI_SOURCE_DIR
+    "${CMAKE_CURRENT_SOURCE_DIR}/ui"
+)
+
+set(PRISMA_UI_OUTPUT_DIR
+    "${CMAKE_CURRENT_BINARY_DIR}/PrismaUI/views/ForHonorCombat"
+)
+
+add_custom_target(ForHonorCombatUI
+    COMMAND "${NPM_EXECUTABLE}" run build
+
+    COMMAND "${CMAKE_COMMAND}" -E rm -rf
+        "${PRISMA_UI_OUTPUT_DIR}"
+
+    COMMAND "${CMAKE_COMMAND}" -E make_directory
+        "${PRISMA_UI_OUTPUT_DIR}"
+
+    COMMAND "${CMAKE_COMMAND}" -E copy_directory
+        "${PRISMA_UI_SOURCE_DIR}/dist"
+        "${PRISMA_UI_OUTPUT_DIR}"
+
+    WORKING_DIRECTORY "${PRISMA_UI_SOURCE_DIR}"
+
+    COMMENT "Building For Honor Combat PrismaUI frontend"
+    VERBATIM
+)
+
+add_dependencies(${PROJECT_NAME} ForHonorCombatUI)

@@ -1,3 +1,4 @@
+#include "AttackPosition.h"
 #include "BlockBehavior.h"
 #include "BlockKey.h"
 #include "Blocking.h"
@@ -5,9 +6,11 @@
 #include "FormCache.h"
 #include "Gameplay.h"
 #include "Hooks.h"
+#include "InputTracking.h"
 #include "Menu.h"
 #include "Parry.h"
 #include "PowerAttackKey.h"
+#include "Prisma.h"
 #include "Settings.h"
 #include "TDMLockBridge.h"
 #include "WeaponClash.h"
@@ -20,9 +23,15 @@ void OnMessage(SKSE::MessagingInterface::Message* message) {
 
     switch (message->type) {
         case SKSE::MessagingInterface::kDataLoaded: {
-            logger::info("Data loaded - loading For Honor Blocking settings");
+            logger::info("Data loaded - loading For Honor Combat settings");
+
             Settings::Load();
             FormCache::LoadForms();
+            DirectionTracker::GetSingleton()->Initialize();
+
+            // Initialize PrismaUI.
+            Prisma::Install();
+            Prisma::Preload();
 
             // MCO::InstallHooks() intentionally not called: its AttackBlockHandler
             // behavior was consolidated into PowerAttackKey's single input hook.
@@ -46,7 +55,12 @@ void OnMessage(SKSE::MessagingInterface::Message* message) {
             TDMLockBridge::Initialize();
             BlockKey::OnDataLoaded();
 
+            // Register combat animation events.
             FHB::Events::AddEventSink();
+
+            // Initialize NPC attack-direction tracking.
+            AttackPosition::GetSingleton()->Initialize();
+
             break;
         }
 
@@ -55,6 +69,10 @@ void OnMessage(SKSE::MessagingInterface::Message* message) {
             MCO::GetSingleton()->RegisterAnimationSink();
             Gameplay::AssignPlayerPerks();
             BlockKey::OnGameLoaded();
+
+            // Register NPC tracking for the loaded game.
+            AttackPosition::GetSingleton()->OnGameLoaded();
+
             break;
         }
 
@@ -65,7 +83,7 @@ void OnMessage(SKSE::MessagingInterface::Message* message) {
 
 SKSEPluginLoad(const SKSE::LoadInterface* skse) {
     SetupLog();
-    logger::info("For Honor Blocking plugin loaded");
+    logger::info("For Honor Combat plugin loaded");
 
     SKSE::Init(skse);
     PowerAttackKey::Initialize();

@@ -9,6 +9,7 @@
     "directxtk",
     "fast-cpp-csv-parser",
     "rapidcsv",
+    "rapidjson",
     "rsm-binary-io",
     "skse-mcp",
     "spdlog",
