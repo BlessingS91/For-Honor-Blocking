@@ -2,11 +2,11 @@
 
 #include <Windows.h>
 
-#include <algorithm>
+#include <string>
 #include <array>
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
-#include <string>
 
 #include "InputTracking.h"
 #include "logger.h"
@@ -89,7 +89,9 @@ namespace Settings {
             }
         }
 
-        float GetFloat(const char* key, float defaultValue) { return GetFloatInSection(kSection, key, defaultValue); }
+        float GetFloat(const char* key, float defaultValue) {
+            return GetFloatInSection(kSection, key, defaultValue);
+        }
 
         int GetInputTrackingInt(const char* key, int defaultValue) {
             return static_cast<int>(GetPrivateProfileIntA(kInputTrackingSection, key, defaultValue, kConfigPath));
@@ -104,7 +106,9 @@ namespace Settings {
             WritePrivateProfileStringA(section, key, valueString.c_str(), kConfigPath);
         }
 
-        void WriteFloat(const char* key, float value) { WriteFloatInSection(kSection, key, value); }
+        void WriteFloat(const char* key, float value) {
+            WriteFloatInSection(kSection, key, value);
+        }
 
         void WriteInputTrackingInt(const char* key, int value) {
             const std::string valueString = std::to_string(value);
@@ -185,8 +189,7 @@ namespace Settings {
             s.centerPieceSizePercent = ReadHudInt(section, "centerPieceSizePercent", s.centerPieceSizePercent);
             s.rotationDegrees = ReadHudInt(section, "rotationDegrees", s.rotationDegrees);
             s.opacityPercent = std::clamp(ReadHudInt(section, "opacityPercent", s.opacityPercent), 0, 100);
-            s.activeOpacityPercent =
-                std::clamp(ReadHudInt(section, "activeOpacityPercent", s.activeOpacityPercent), 0, 100);
+            s.activeOpacityPercent = std::clamp(ReadHudInt(section, "activeOpacityPercent", s.activeOpacityPercent), 0, 100);
             s.centerMovementPixels = ReadHudInt(section, "centerMovementPixels", s.centerMovementPixels);
             s.centerMovementDurationMs = ReadHudInt(section, "centerMovementDurationMs", s.centerMovementDurationMs);
             s.activeColor = ReadHudColor(section, "activeColor", s.activeColor);
@@ -211,11 +214,9 @@ namespace Settings {
             s.scaleWithDistance = ReadHudBool(section, "scaleWithDistance", s.scaleWithDistance);
             s.mirrorAttackDirections = ReadHudBool(section, "mirrorAttackDirections", s.mirrorAttackDirections);
             s.showCenter = ReadHudBool(section, "showCenter", s.showCenter);
-            s.topThreshold = std::clamp(GetFloatInSection(section, "topThreshold", s.topThreshold), 0.0f, 200.0f);
             s.scalePercent = ReadHudInt(section, "scalePercent", s.scalePercent);
             s.opacityPercent = std::clamp(ReadHudInt(section, "opacityPercent", s.opacityPercent), 0, 100);
-            s.activeOpacityPercent =
-                std::clamp(ReadHudInt(section, "activeOpacityPercent", s.activeOpacityPercent), 0, 100);
+            s.activeOpacityPercent = std::clamp(ReadHudInt(section, "activeOpacityPercent", s.activeOpacityPercent), 0, 100);
             s.offsetXPixels = ReadHudInt(section, "offsetXPixels", s.offsetXPixels);
             s.offsetYPixels = ReadHudInt(section, "offsetYPixels", s.offsetYPixels);
             s.rotationDegrees = ReadHudInt(section, "rotationDegrees", s.rotationDegrees);
@@ -276,7 +277,6 @@ namespace Settings {
             WriteHudBool(section, "scaleWithDistance", s.scaleWithDistance);
             WriteHudBool(section, "mirrorAttackDirections", s.mirrorAttackDirections);
             WriteHudBool(section, "showCenter", s.showCenter);
-            WriteFloatInSection(section, "topThreshold", s.topThreshold);
             WriteHudInt(section, "scalePercent", s.scalePercent);
             WriteHudInt(section, "opacityPercent", s.opacityPercent);
             WriteHudInt(section, "activeOpacityPercent", s.activeOpacityPercent);
@@ -341,15 +341,12 @@ namespace Settings {
         InputTrackingTuning::Values tuning{};
         tuning.mouseSensitivity = GetFloatInSection(kInputTrackingSection, "MouseSensitivity", tuning.mouseSensitivity);
         tuning.mouseDeadzone = GetFloatInSection(kInputTrackingSection, "MouseDeadzone", tuning.mouseDeadzone);
-        tuning.controllerSensitivity =
-            GetFloatInSection(kInputTrackingSection, "ControllerSensitivity", tuning.controllerSensitivity);
-        tuning.controllerDeadzone =
-            GetFloatInSection(kInputTrackingSection, "ControllerDeadzone", tuning.controllerDeadzone);
-        tuning.controllerSmoothing =
-            GetFloatInSection(kInputTrackingSection, "ControllerSmoothing", tuning.controllerSmoothing);
+        tuning.controllerSensitivity = GetFloatInSection(kInputTrackingSection, "ControllerSensitivity", tuning.controllerSensitivity);
+        tuning.controllerDeadzone = GetFloatInSection(kInputTrackingSection, "ControllerDeadzone", tuning.controllerDeadzone);
+        tuning.controllerSmoothing = GetFloatInSection(kInputTrackingSection, "ControllerSmoothing", tuning.controllerSmoothing);
         tuning.topSectorDegrees = GetInputTrackingInt("TopSectorDegrees", tuning.topSectorDegrees);
-        tuning.bottomNeutralAngleDegrees =
-            GetInputTrackingInt("BottomNeutralAngleDegrees", tuning.bottomNeutralAngleDegrees);
+        tuning.bottomNeutralAngleDegrees = GetInputTrackingInt("BottomNeutralAngleDegrees", tuning.bottomNeutralAngleDegrees);
+        tuning.centerNeutralZonePercent = GetInputTrackingInt("CenterNeutralZonePercent", tuning.centerNeutralZonePercent);
         tuning.directionSwitchDelayMs = GetInputTrackingInt("DirectionSwitchDelayMs", tuning.directionSwitchDelayMs);
         tuning.neutralDecayMs = GetInputTrackingInt("NeutralDecayMs", tuning.neutralDecayMs);
         InputTrackingTuning::Set(tuning);
@@ -419,6 +416,7 @@ namespace Settings {
         WriteFloatInSection(kInputTrackingSection, "ControllerSmoothing", tuning.controllerSmoothing);
         WriteInputTrackingInt("TopSectorDegrees", tuning.topSectorDegrees);
         WriteInputTrackingInt("BottomNeutralAngleDegrees", tuning.bottomNeutralAngleDegrees);
+        WriteInputTrackingInt("CenterNeutralZonePercent", tuning.centerNeutralZonePercent);
         WriteInputTrackingInt("DirectionSwitchDelayMs", tuning.directionSwitchDelayMs);
         WriteInputTrackingInt("NeutralDecayMs", tuning.neutralDecayMs);
 

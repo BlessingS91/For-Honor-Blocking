@@ -7,7 +7,7 @@
 #include "logger.h"
 
 namespace {
-    std::atomic_bool g_guardResumeDispatched{ false };
+    std::atomic_bool g_guardResumeDispatched{false};
 }
 
 MCO* MCO::GetSingleton() {
@@ -15,9 +15,7 @@ MCO* MCO::GetSingleton() {
     return &singleton;
 }
 
-void MCO::InstallHooks() {
-    Hooks::Install();
-}
+void MCO::InstallHooks() { Hooks::Install(); }
 
 void MCO::RegisterAnimationSink() {
     auto* player = RE::PlayerCharacter::GetSingleton();
@@ -33,10 +31,8 @@ void MCO::RegisterAnimationSink() {
     }
 }
 
-RE::BSEventNotifyControl MCO::ProcessEvent(
-    const RE::BSAnimationGraphEvent* a_event,
-    RE::BSTEventSource<RE::BSAnimationGraphEvent>*) {
-
+RE::BSEventNotifyControl MCO::ProcessEvent(const RE::BSAnimationGraphEvent* a_event,
+                                           RE::BSTEventSource<RE::BSAnimationGraphEvent>*) {
     auto* player = RE::PlayerCharacter::GetSingleton();
 
     if (!a_event || !player || a_event->holder != player) {
@@ -46,16 +42,13 @@ RE::BSEventNotifyControl MCO::ProcessEvent(
     const std::string_view tag = a_event->tag.c_str();
 
     // Allow one guard resume per attack window.
-    if (tag == "attackStart" ||
-        tag == "MCO_PowerAttackInitiate" ||
-        tag == "MCO_WinOpen" ||
-        tag == "MCO_PowerWinOpen") {
+    if (tag == "attackStart" || tag == "MCO_PowerAttackInitiate" || tag == "MCO_WinOpen" || tag == "MCO_PowerWinOpen") {
         g_guardResumeDispatched.store(false);
     }
 
     // Resume guarding only when an MCO attack window closes.
     if (tag == "MCO_WinClose" || tag == "MCO_PowerWinClose") {
-        // ProcessBlock(tag);
+        ProcessBlock(tag);
     }
 
     return RE::BSEventNotifyControl::kContinue;
@@ -86,19 +79,12 @@ void MCO::ProcessBlock(std::string_view a_eventTag) {
     const bool ended = player->NotifyAnimationGraph("MCO_EndAnimation");
     const bool guarded = player->NotifyAnimationGraph("blockStart");
 
-    logger::info(
-        "[BLOCK BEHAVIOR] Guard resume | event={} iWantBlock={} end={} blockStart={}",
-        a_eventTag,
-        iWantBlock,
-        ended,
-        guarded);
+    logger::info("[BLOCK BEHAVIOR] Guard resume | event={} iWantBlock={} end={} blockStart={}", a_eventTag, iWantBlock,
+                 ended, guarded);
 }
 
-void MCO::Hooks::AttackBlockHandler_ProcessButton::thunk(
-    RE::AttackBlockHandler* a_this,
-    RE::ButtonEvent* a_event,
-    RE::PlayerControlsData* a_data) {
-
+void MCO::Hooks::AttackBlockHandler_ProcessButton::thunk(RE::AttackBlockHandler* a_this, RE::ButtonEvent* a_event,
+                                                         RE::PlayerControlsData* a_data) {
     // PowerAttackKey.cpp owns the immediate light-attack dispatch. Do not
     // send blockStop here first: this is another hook on the SAME vtable
     // function, and changing the guard state before SPA sees the button can
@@ -107,15 +93,11 @@ void MCO::Hooks::AttackBlockHandler_ProcessButton::thunk(
 }
 
 void MCO::Hooks::Install() {
-    REL::Relocation<std::uintptr_t> vtable{ RE::VTABLE_AttackBlockHandler[0] };
+    REL::Relocation<std::uintptr_t> vtable{RE::VTABLE_AttackBlockHandler[0]};
 
-    const auto index = REL::Module::IsVR() ||
-                               REL::Module::get().version() >= SKSE::RUNTIME_SSE_1_7_99
-                           ? 0x6
-                           : 0x4;
+    const auto index = REL::Module::IsVR() || REL::Module::get().version() >= SKSE::RUNTIME_SSE_1_7_99 ? 0x6 : 0x4;
 
-    AttackBlockHandler_ProcessButton::func =
-        vtable.write_vfunc(index, AttackBlockHandler_ProcessButton::thunk);
+    AttackBlockHandler_ProcessButton::func = vtable.write_vfunc(index, AttackBlockHandler_ProcessButton::thunk);
 
     logger::info("[BLOCK BEHAVIOR] AttackBlockHandler hook installed");
 }

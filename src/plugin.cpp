@@ -52,9 +52,9 @@ void OnMessage(SKSE::MessagingInterface::Message* message) {
             // Register SPA before SimpleBlock so its power-attack input callback
             // can consume the power chord before BlockKey handles regular blocking.
             PowerAttackKey::OnDataLoaded();
+            Hooks::Install();
             TDMLockBridge::Initialize();
             BlockKey::OnDataLoaded();
-
             // Register combat animation events.
             FHB::Events::AddEventSink();
 

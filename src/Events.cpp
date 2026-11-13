@@ -4,8 +4,13 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <mutex>
+#include <thread>
+#include <unordered_map>
 
 #include "PowerAttackKey.h"
+#include "Unblockables.h"
+#include "logger.h"
 
 namespace {
     using namespace std::chrono_literals;
@@ -18,12 +23,9 @@ namespace {
 
     std::chrono::milliseconds GetScaledDuration(RE::Actor* actor, float baseDuration, float scaling) {
         const auto* actorValueOwner = actor->AsActorValueOwner();
-
         const float blockSkill =
             actorValueOwner ? std::clamp(actorValueOwner->GetActorValue(RE::ActorValue::kBlock), 0.0f, 100.0f) : 0.0f;
-
         const float duration = std::clamp(baseDuration + blockSkill * scaling, 1.0f, 10000.0f);
-
         return std::chrono::milliseconds(static_cast<std::int64_t>(std::lround(duration)));
     }
 
@@ -32,7 +34,7 @@ namespace {
     std::uint64_t nextGeneration = 0;
 
     void ActivateWindow(RE::Actor* actor, const char* variable, std::uint8_t variableID,
-                        std::chrono::milliseconds duration) {
+                        std::chrono::milliseconds duration, std::int32_t value = 1) {
         if (!actor) {
             return;
         }
@@ -47,22 +49,20 @@ namespace {
             return;
         }
 
-        if (!actor->SetGraphVariableInt(variable, 1)) {
+        if (!actor->SetGraphVariableInt(variable, value)) {
             logger::warn("[FHB] Failed to set {}", variable);
             return;
         }
 
         const std::uint64_t key = (static_cast<std::uint64_t>(actor->GetFormID()) << 3) | variableID;
-
         std::uint64_t generation;
-
         {
             std::scoped_lock lock(resetMutex);
             generation = ++nextGeneration;
             resetGenerations[key] = generation;
         }
 
-        logger::info("[FHB] {} = 1", variable);
+        logger::info("[FHB] {} = {}", variable, value);
 
         std::thread([handle, variable, key, generation, tasks, duration]() {
             std::this_thread::sleep_for(duration);
@@ -70,13 +70,10 @@ namespace {
             tasks->AddTask([handle, variable, key, generation]() {
                 {
                     std::scoped_lock lock(resetMutex);
-
                     const auto it = resetGenerations.find(key);
-
                     if (it == resetGenerations.end() || it->second != generation) {
                         return;
                     }
-
                     resetGenerations.erase(it);
                 }
 
@@ -90,18 +87,24 @@ namespace {
 }
 
 namespace FHB {
-
     void Events::ActivateParryKnockdown(RE::Actor* actor) { ActivateWindow(actor, "ParryKnockdownFHB", 3, 200ms); }
 
+    // Retained for other existing call sites; no longer used for unblockable reactions.
     void Events::ActivateGuardBroken(RE::Actor* actor) { ActivateWindow(actor, "GuardBrokenFHB", 4, 2000ms); }
+
+    void Events::ActivateUnblockableReaction(RE::Actor* actor, int reaction) {
+        if (reaction != 1 && reaction != 2) {
+            return;
+        }
+        // Existing timer/generation handling prevents an older hit from clearing a newer signal.
+        ActivateWindow(actor, "UnblockableReactionFHB", 5, 2000ms, reaction);
+    }
 
     void Events::AddEventSink() {
         REL::Relocation<std::uintptr_t> pcVtbl{RE::VTABLE_PlayerCharacter[2]};
-
         REL::Relocation<std::uintptr_t> npcVtbl{RE::VTABLE_Character[2]};
 
         _PCProcessEvent = pcVtbl.write_vfunc(0x1, reinterpret_cast<std::uintptr_t>(&PCProcessEvent));
-
         _NPCProcessEvent = npcVtbl.write_vfunc(0x1, reinterpret_cast<std::uintptr_t>(&NPCProcessEvent));
 
         logger::info("[FHB] Animation event hooks installed.");
@@ -115,7 +118,6 @@ namespace FHB {
         }
 
         auto* actor = const_cast<RE::Actor*>(a_event->holder->As<RE::Actor>());
-
         if (!actor) {
             return RE::BSEventNotifyControl::kContinue;
         }
@@ -126,33 +128,19 @@ namespace FHB {
             PowerAttackKey::OnPlayerAnimationEvent(tag.c_str());
         }
 
+        // Creature classification is kept in Unblockables.cpp. Event timing and
+        // activation are the same as before this refactor.
         if (tag == "weaponSwing" && !actor->IsPlayerRef()) {
-            auto* race = actor->GetRace();
-            auto* process = actor->GetActorRuntimeData().currentProcess;
-
-            static auto* creatureKeyword = RE::TESForm::LookupByID<RE::BGSKeyword>(0x13795);
-            static auto* animalKeyword = RE::TESForm::LookupByID<RE::BGSKeyword>(0x13798);
-            static auto* dwarvenKeyword = RE::TESForm::LookupByID<RE::BGSKeyword>(0x1397A);
-
-            const bool isCreature = race && ((creatureKeyword && race->HasKeyword(creatureKeyword)) ||
-                                             (animalKeyword && race->HasKeyword(animalKeyword)) ||
-                                             (dwarvenKeyword && race->HasKeyword(dwarvenKeyword)));
-
-            if (isCreature && process && process->high) {
-                const auto& attackData = process->high->attackData;
-
-                if (attackData) {
-                    const float damageMult = attackData->data.damageMult;
-
-                    if (damageMult > 1.0f) {
-                        ActivateWindow(actor, "UnblockableFHB", 1, 2000ms);
-                    } else {
-                        actor->SetGraphVariableInt("UnblockableFHB", 0);
-                    }
-
-                    logger::info("[FHB CREATURE] Actor={} | ATKD Damage Mult={} | Unblockable={}", actor->GetName(),
-                                 damageMult, damageMult > 1.0f);
+            float damageMult = 0.0f;
+            if (const auto isUnblockable = Unblockables::GetCreatureSwingUnblockable(actor, damageMult)) {
+                if (*isUnblockable) {
+                    ActivateWindow(actor, "UnblockableFHB", 1, 2000ms);
+                } else {
+                    actor->SetGraphVariableInt("UnblockableFHB", 0);
                 }
+
+                logger::info("[FHB CREATURE] Actor={} | ATKD Damage Mult={} | Unblockable={}", actor->GetName(),
+                             damageMult, *isUnblockable);
             }
         }
 
@@ -161,18 +149,15 @@ namespace FHB {
             actor->SetGraphVariableInt("ParryActiveFHB", 1);
 
             const auto duration = GetScaledDuration(actor, kParryBaseDurationMs, kParryScalingMsPerLevel);
-
             ActivateWindow(actor, "ParryWindowFHB", 0, duration);
-
             logger::info("[FHB] Parry window duration: {} ms", duration.count());
+
         } else if (tag == "UnblockableStartFHB") {
             ActivateWindow(actor, "UnblockableFHB", 1, 2000ms);
 
         } else if (tag == "AllBlockStartFHB") {
             const auto duration = GetScaledDuration(actor, kAllBlockBaseDurationMs, kAllBlockScalingMsPerLevel);
-
             ActivateWindow(actor, "AllBlockFHB", 2, duration);
-
             logger::info("[FHB] All-block window duration: {} ms", duration.count());
 
         } else if (tag == "staggerStop") {
@@ -185,6 +170,7 @@ namespace FHB {
             actor->SetGraphVariableInt("ParryActiveFHB", 0);
             actor->SetGraphVariableInt("ParrySuccessFHB", 0);
             actor->SetGraphVariableInt("AllBlockFHB", 0);
+
             actor->SetGraphVariableInt("UnblockableFHB", 0);
 
             logger::info("[FHB] Combat states reset | Event={}", tag.c_str());

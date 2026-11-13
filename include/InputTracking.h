@@ -21,6 +21,9 @@ namespace InputTrackingTuning
         int topSectorDegrees = 120;
         // Full angular width of the neutral sector centered on straight down.
         int bottomNeutralAngleDegrees = 30;
+        // Extra center clearance as a percentage of each device's deadzone.
+        // 0 preserves the original thresholds. Separate from the bottom angular wedge.
+        int centerNeutralZonePercent = 20;
         // Time a new non-neutral direction must remain selected before switching.
         // 0 disables direction-switch delay; no forced intermediate Neutral state.
         int directionSwitchDelayMs = 0;

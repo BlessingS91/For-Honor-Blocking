@@ -9,6 +9,7 @@ namespace FHB {
         static void AddEventSink();
         static void ActivateParryKnockdown(RE::Actor* actor);
         static void ActivateGuardBroken(RE::Actor* actor);
+        static void ActivateUnblockableReaction(RE::Actor* actor, int reaction);
 
     private:
         static RE::BSEventNotifyControl ProcessEvent(RE::BSTEventSink<RE::BSAnimationGraphEvent>* a_this,

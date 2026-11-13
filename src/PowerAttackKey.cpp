@@ -9,14 +9,11 @@
 #include <cmath>
 #include <string_view>
 
-#include "AttackPosition.h"
-#include "InputTracking.h"
-#include "Prisma.h"
 #include "RE/S/ScriptEventSourceHolder.h"
 #include "RE/T/TESHitEvent.h"
 #include "SKSE/InputMap.h"
 #include "SKSEMenuFramework.h"
-#include "TDMLockBridge.h"
+#include "Unblockables.h"
 using namespace RE;
 using namespace SKSE;
 extern "C" IMAGE_DOS_HEADER __ImageBase;
@@ -171,13 +168,14 @@ namespace {
         return player->IsBlocking() || (player->GetGraphVariableBool("IsBlocking", graphBlocking) && graphBlocking);
     }
 
-    // This is the exact name exposed by the DirecionalCycleMoveset animation graph.
-    // Only directly backward (5) selects the ordinary MCO attack from guard.
-    // 0, 1-4, and 6-8 (or an unreadable variable) remain instant parries.
-    bool IsDirectlyBackward(PlayerCharacter* player) {
+    // CameraDirectionFHB determines the light attack behavior from guard.
+    // 0 = normal MCO light attack, waits for block exit.
+    // Any other value (or an unreadable variable) = immediate parry attack.
+    bool IsNormalAttackDirection(PlayerCharacter* player) {
         if (!player) return false;
+
         std::int32_t direction = 0;
-        return player->GetGraphVariableInt("CameraMovementFHB", direction) && direction == 0;
+        return player->GetGraphVariableInt("CameraDirectionFHB", direction) && direction == 0;
     }
 
     void ResetFromBlockAttack(PlayerCharacter* player, const char* /*reason*/) {
@@ -952,10 +950,10 @@ namespace {
 
                     if (IsActuallyBlocking(player)) {
                         BGSAction* action = isRightAttack ? g_rightAttackAction : g_leftAttackAction;
-                        // Snapshot the direction on button-down, not on a later frame.
-                        // 5 = directly backward -> normal attack with MCO-compatible exit.
-                        // Everything else -> existing immediate parry attack.
-                        const bool normalAttack = IsDirectlyBackward(player);
+                        // Snapshot CameraDirectionFHB on button-down, not on a later frame.
+                        // 0 = normal light attack with MCO-compatible block exit.
+                        // Everything else = immediate parry attack.
+                        const bool normalAttack = IsNormalAttackDirection(player);
                         const bool accepted = normalAttack ? BeginNormalLightAttackFromBlock(player, action)
                                                            : BeginLightAttackFromBlock(player, action);
                         if (accepted) {
@@ -977,36 +975,6 @@ namespace {
         }
         static inline ProcessButton_t _ProcessButton = nullptr;
     };
-    // Skyrim AE 1.6.1170: PlayerCharacter::Update vtable slot 0xAD.
-    // An update hook is required so a tap of the power key advances the queued
-    // attack even if no more ButtonEvents arrive.
-    struct PlayerUpdateHook {
-        static void Install() {
-            REL::Relocation<std::uintptr_t> vtbl{VTABLE_PlayerCharacter[0]};
-            _Update = reinterpret_cast<Update_t>(vtbl.write_vfunc(0xAD, Hook_Update));
-            SKSE::log::info("[SPA TRANSITION] PlayerCharacter::Update hook installed");
-        }
-
-    private:
-        using Update_t = void (*)(PlayerCharacter*, float);
-        static void Hook_Update(PlayerCharacter* player, float delta) {
-            _Update(player, delta);
-            AdvanceBlockAttackTransition(player);
-            AdvanceLightAttackTransition(player);
-            ExpireFromBlockAttack(player);
-            TDMLockBridge::Update();
-            // Inactivity decay reuses this existing player update hook.
-            DirectionTracker::GetSingleton()->UpdateDecay();
-            // PLAYER HUD: read the player's graph state after input decay.
-            // NPC HUD remains independently driven by AttackPosition.
-            Prisma::UpdatePlayerHUD();
-            // NPC direction warnings: read NPC graph states and update PrismaUI.
-            // Reuses the existing update hook; no additional hook or dispatcher.
-            AttackPosition::GetSingleton()->UpdateHUD();
-        }
-        static inline Update_t _Update = nullptr;
-    };
-
     bool SaveConfig(uint32_t keyCode, uint32_t leftKeyCode, uint32_t dualKeyCode, uint32_t rightGamepadKey,
                     uint32_t leftGamepadKey, uint32_t dualGamepadKey, uint32_t rightMod, uint32_t leftMod,
                     uint32_t dualMod, bool mcoMode, bool noStaminaPA, float minimumPowerAttackStamina,
@@ -1637,6 +1605,14 @@ namespace PowerAttackKey {
 
     void Initialize() { g_task = SKSE::GetTaskInterface(); }
 
+    // Called once per PlayerCharacter update by the shared hook in Hooks.cpp.
+    // Keep deferred light/power attack transitions inside PowerAttackKey.
+    void OnPlayerUpdate(RE::PlayerCharacter* player) {
+        AdvanceBlockAttackTransition(player);
+        AdvanceLightAttackTransition(player);
+        ExpireFromBlockAttack(player);
+    }
+
     void OnDataLoaded() {
         SKSE::log::info("[FHB SPA V2] OnDataLoaded entered, configuring controller bindings");
 
@@ -1669,7 +1645,6 @@ namespace PowerAttackKey {
             return;
         }
         AttackBlockHook::Install();
-        PlayerUpdateHook::Install();
         if (!RegisterPlayerHitSink()) {
             SKSE::log::warn("[SPA] Player hit listener unavailable; animation-event fallback remains active");
         }
