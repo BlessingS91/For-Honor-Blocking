@@ -1,3 +1,4 @@
+
 #pragma once
 
 #include <cstdint>
@@ -5,13 +6,22 @@
 
 struct AttackWarningVisual {
     std::uint32_t id{0};
-    int direction{0}; // NPC: 1 top, 2 right, 3 left (mirrored in the UI)
+    int direction{0};  // NPC attack: 1 top, 2 right, 3 left (mirrored in the UI)
     float xPercent{50.0f};
     float yPercent{50.0f};
     float resolutionScale{1.0f};
     float distanceScale{1.0f};
+
     bool hitFrameFlash{false};
     bool unblockable{false};
+    bool allBlock{false};
+    bool parryActive{false};
+    bool parryWindow{false};
+    bool parrySuccess{false};
+
+    // NPC directional blocking
+    std::int32_t blockDirection{0};  // 0 neutral, 1 top, 2 right, 3 left
+    bool blocking{false};
 };
 
 class Prisma {
@@ -31,10 +41,11 @@ public:
     static void UpdateDirection(int direction);
     static void UpdateAllBlock(bool allBlock);
     static void UpdateUnblockable(bool unblockable);
-    static void UpdateRuntimeState(bool eligible, bool previewEligible, float xPercent,
-                                   float yPercent, float resolutionScale, bool attached);
+    static void UpdateRuntimeState(bool eligible, bool previewEligible, float xPercent, float yPercent,
+                                   float resolutionScale, bool attached);
     static void UpdateAttackWarnings(const std::vector<AttackWarningVisual>& warnings);
     static void Reset();
+
     // Each UI tab renders its own controls; Menu.cpp only registers these.
     static void RenderPlayerSettings();
     static void RenderNPCSettings();

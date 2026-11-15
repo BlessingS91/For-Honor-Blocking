@@ -1,8 +1,10 @@
+
 #include "Menu.h"
 
 #include <SKSE/SKSE.h>
 #include <SKSEMenuFramework.h>
 
+#include "AttackCancel.h"
 #include "AttackSpeed.h"
 #include "Blocking.h"
 #include "InputTracking.h"
@@ -10,8 +12,12 @@
 
 // The existing binding modules provide their own settings renderers.
 // Only their UI entry points are used here; gameplay input stays in each module.
-namespace BlockKey { void RenderInputSettings(); }
-namespace PowerAttackKey { void RenderInputSettings(); }
+namespace BlockKey {
+    void RenderInputSettings();
+}
+namespace PowerAttackKey {
+    void RenderInputSettings();
+}
 
 namespace {
     namespace ui = ImGuiMCP;
@@ -25,6 +31,7 @@ namespace {
     constexpr auto kInputsPage = "Inputs";
     constexpr auto kInputTrackingPage = "Input Tracking";
     constexpr auto kAttackSpeedPage = "Attack Speed";
+    constexpr auto kAttackCancelPage = "Attack Cancel";
     constexpr auto kPlayerHudPage = "Player HUD";
     constexpr auto kNpcHudPage = "NPC HUD";
 
@@ -59,12 +66,17 @@ namespace Menu {
         }
 
         SKSEMenuFramework::SetSection(kSection);
+
         SKSEMenuFramework::AddSectionItem(kBlockingPage, Blocking::RenderSettings);
         SKSEMenuFramework::AddSectionItem(kInputsPage, RenderInputs);
         SKSEMenuFramework::AddSectionItem(kInputTrackingPage, InputTrackingTuning::RenderSettings);
         SKSEMenuFramework::AddSectionItem(kAttackSpeedPage, FHBAttackSpeed::RenderSettings);
+        SKSEMenuFramework::AddSectionItem(kAttackCancelPage, AttackCancel::RenderSettings);
         SKSEMenuFramework::AddSectionItem(kPlayerHudPage, Prisma::RenderPlayerSettings);
         SKSEMenuFramework::AddSectionItem(kNpcHudPage, Prisma::RenderNPCSettings);
-        SKSE::log::info("[menu] registered {} with blocking, input, attack speed, and player/NPC HUD tabs", kSection);
+
+        SKSE::log::info(
+            "[menu] registered {} with blocking, inputs, attack speed, attack cancel, and player/NPC HUD tabs",
+            kSection);
     }
 }

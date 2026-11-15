@@ -1,7 +1,5 @@
 #include "AttackPosition.h"
 
-
-
 #include <algorithm>
 
 #include <cctype>
@@ -30,7 +28,8 @@
 
 #include <vector>
 
-
+#include "AttackTrackingMode.h"
+#include "NPCDirectionalBlock.h"
 
 #include "Prisma.h"
 
@@ -38,19 +37,15 @@
 
 #include "Settings.h"
 
-
-
 namespace {
 
     // ========================================================================
 
-    // NPC GRAPH DIRECTION STATE - preserved from Honor Combat's attack tracker
+    // SHARED PLAYER/NPC ATTACK DIRECTION STATE
 
     // ========================================================================
 
     constexpr char kAttackDirectionVariable[] = "AttackDirectionFHB";
-
-
 
     std::mutex g_attackDirectionsMutex;
 
@@ -58,27 +53,23 @@ namespace {
 
     std::unordered_map<RE::FormID, RE::ActorHandle> g_activeWarnings;
 
-
-
     // Lock direction after the first indicator/swing, until an existing release event.
 
     std::unordered_set<RE::FormID> g_indicatorDirectionLocked;
 
-
-
-
+    // The same animation-event sink tracks player attacks; registration is
+    // independent of NPC combat state and retried by the existing update.
+    bool g_playerSinkRegistered = false;
 
     // ========================================================================
 
-    // NPC ANIMATION SINK REGISTRATION - no dispatcher or extra update hook
+    // ANIMATION SINK REGISTRATION - no dispatcher or extra update hook
 
     // ========================================================================
 
     std::mutex g_trackedNPCsMutex;
 
     std::unordered_set<RE::FormID> g_trackedNPCs;
-
-
 
     struct PendingRegistration {
 
@@ -95,8 +86,6 @@ namespace {
     constexpr auto kRetryInterval = std::chrono::milliseconds(100);
 
     constexpr int kMaxRegisterAttempts = 20;
-
-
 
     void QueueRegistration(RE::Actor* actor) {
 
@@ -116,11 +105,9 @@ namespace {
 
     }
 
-
-
     // ========================================================================
 
-    // POSITION CLASSIFICATION - original hand/creature-node logic
+    // ATTACK POSITION CLASSIFICATION - player-head height and horizontal center band
 
     // ========================================================================
 
@@ -132,8 +119,6 @@ namespace {
 
         }
 
-
-
         for (const auto* name : a_names) {
 
             if (auto* node = a_root->GetObjectByName(RE::BSFixedString(name))) {
@@ -144,137 +129,209 @@ namespace {
 
         }
 
-
-
         return nullptr;
 
     }
 
+    // NPC and player hand positions use the player's chest as the reference.
+    // The player's local coordinate system preserves left/right classification
+    // when the camera or character rotates.
+    RE::NiAVObject* GetTorsoNode(RE::Actor* actor);
 
+    RE::NiAVObject* GetReferenceChestNode(RE::PlayerCharacter* player) {
+        auto* referenceRoot = player ? player->Get3D(false) : nullptr;
+        auto* referenceChest = referenceRoot
+            ? FindFirstNode(referenceRoot, {"NPC Spine2 [Spn2]", "NPC Spine1 [Spn1]",
+                                            "NPC Spine [Spn0]", "Bip01 Spine2", "Bip01 Spine1"})
+            : nullptr;
+        return referenceChest ? referenceChest : GetTorsoNode(player);
+    }
 
-    std::optional<RE::NiPoint3> GetHandPositionRelativeToPlayer(RE::Actor* a_actor, bool a_leftHand) {
+    // Return the player's head Z relative to the player's chest in the same
+    // actor-local coordinate frame used by both hand and weapon-tip samples.
+    // NPCs continue to classify relative to the player, as before.
+    std::optional<float> GetPlayerHeadHeightAboveChest() {
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        auto* root = player ? player->Get3D(false) : nullptr;
+        auto* chest = GetReferenceChestNode(player);
+        auto* head = root
+            ? FindFirstNode(root, {"NPC Head [Head]", "Bip01 Head", "NPC Neck [Neck]", "Bip01 Neck"})
+            : nullptr;
+        if (!root || !chest || !head) return std::nullopt;
 
-        if (!a_actor || !a_actor->Is3DLoaded()) {
+        const auto inverse = root->world.Invert();
+        const RE::NiPoint3 localHead = inverse * head->world.translate;
+        const RE::NiPoint3 localChest = inverse * chest->world.translate;
+        const float headAboveChest = localHead.z - localChest.z;
+        return std::isfinite(headAboveChest) ? std::optional<float>{headAboveChest} : std::nullopt;
+    }
 
-            return std::nullopt;
-
-        }
-
-
+    std::optional<RE::NiPoint3> GetHandPositionRelativeToReference(RE::Actor* attacker, bool leftHand) {
+        if (!attacker || !attacker->Is3DLoaded()) return std::nullopt;
 
         auto* player = RE::PlayerCharacter::GetSingleton();
+        if (!player || !player->Is3DLoaded()) return std::nullopt;
 
-        if (!player || !player->Is3DLoaded()) {
-
-            return std::nullopt;
-
-        }
-
-
-
-        auto* actorRoot = a_actor->Get3D(false);
-
-        auto* playerRoot = player->Get3D(false);
-
-
-
-        if (!actorRoot || !playerRoot) {
-
-            return std::nullopt;
-
-        }
-
-
+        // NPC -> player chest; player -> own chest. Both share one frame,
+        // but the attack hand comes from the individual attacking actor.
+        auto* attackingRoot = attacker->Get3D(false);
+        auto* referenceRoot = player->Get3D(false);
+        auto* referenceChest = GetReferenceChestNode(player);
+        if (!attackingRoot || !referenceRoot || !referenceChest) return std::nullopt;
 
         static auto* creatureKeyword = RE::TESForm::LookupByID<RE::BGSKeyword>(0x13795);
-
         static auto* animalKeyword = RE::TESForm::LookupByID<RE::BGSKeyword>(0x13798);
-
         static auto* dwarvenKeyword = RE::TESForm::LookupByID<RE::BGSKeyword>(0x1397A);
 
-
-
-        auto* race = a_actor->GetRace();
-
-
-
+        auto* race = attacker->GetRace();
         const bool isCreature = race && ((creatureKeyword && race->HasKeyword(creatureKeyword)) ||
-
                                          (animalKeyword && race->HasKeyword(animalKeyword)) ||
-
                                          (dwarvenKeyword && race->HasKeyword(dwarvenKeyword)));
 
-
-
-        RE::NiAVObject* positionNode = nullptr;
-
-
-
+        RE::NiAVObject* handNode = nullptr;
         if (isCreature) {
-
-            positionNode = FindFirstNode(actorRoot, {"NPC Spine2 [Spn2]", "NPC Spine1 [Spn1]", "NPC Spine [Spn0]"});
-
-
-
-            if (!positionNode) {
-
-                positionNode = actorRoot;
-
-            }
-
+            handNode = FindFirstNode(attackingRoot, {"NPC Spine2 [Spn2]", "NPC Spine1 [Spn1]", "NPC Spine [Spn0]"});
+            if (!handNode) handNode = attackingRoot;
         } else {
-
-            positionNode = a_leftHand
-
-                               ? FindFirstNode(actorRoot, {"NPC L Hand [LHnd]", "NPC L Forearm [LLar]"})
-
-                               : FindFirstNode(actorRoot, {"NPC R Hand [RHnd]", "NPC R Forearm [RLar]", "WEAPON"});
-
+            handNode = leftHand
+                           ? FindFirstNode(attackingRoot, {"NPC L Hand [LHnd]", "NPC L Forearm [LLar]"})
+                           : FindFirstNode(attackingRoot, {"NPC R Hand [RHnd]", "NPC R Forearm [RLar]", "WEAPON"});
         }
+        if (!handNode) return std::nullopt;
 
+        const auto inverse = referenceRoot->world.Invert();
+        const RE::NiPoint3 localHand = inverse * handNode->world.translate;
+        const RE::NiPoint3 localChest = inverse * referenceChest->world.translate;
+        return RE::NiPoint3{localHand.x - localChest.x, localHand.y - localChest.y,
+                            localHand.z - localChest.z};
+    }
 
+    // Precision uses the visual weapon model under WEAPON (right hand) or
+    // SHIELD (left hand) to estimate weapon reach. Its collision tip offset is
+    // along the attachment node's local +Y axis. We only need an approximate
+    // *visual* tip, so do not use the collision capsule's gameplay multipliers.
+    // Called once per attack window, not every frame.
+    struct WeaponTipSample {
+        RE::NiPoint3 worldPosition;
+        float length;
+    };
 
-        if (!positionNode) {
+    std::optional<WeaponTipSample> GetWeaponTipWorldPosition(RE::Actor* attacker, bool leftHand) {
+        if (!attacker || !attacker->Is3DLoaded()) return std::nullopt;
 
+        // No visual weapon tip for fists, shields, bows, staves, spells, etc.
+        auto* equipped = attacker->GetEquippedObject(leftHand);
+        auto* weapon = equipped ? skyrim_cast<RE::TESObjectWEAP*>(equipped) : nullptr;
+        if (!weapon || weapon->IsBow() || weapon->IsCrossbow() || weapon->IsStaff()) {
             return std::nullopt;
-
         }
 
+        auto* root = attacker->Get3D(false);
+        if (!root) return std::nullopt;
 
+        // Names intentionally match Precision's AttackCollision.cpp.
+        auto* attachment = root->GetObjectByName(RE::BSFixedString(leftHand ? "SHIELD" : "WEAPON"));
+        auto* attachmentNode = attachment ? attachment->AsNode() : nullptr;
+        if (!attachmentNode) return std::nullopt;
 
-        return playerRoot->world.Invert() * positionNode->world.translate;
+        // GetChildren() supports SE/AE/VR; direct .children is unavailable in
+        // CommonLibSSE-NG when SKYRIM_CROSS_VR is enabled.
+        const auto& children = attachmentNode->GetChildren();
+        if (children.size() == 0 || !children[0]) return std::nullopt;
 
+        // The first child is the equipped weapon's visual model in the normal
+        // Skyrim skeleton. Use the *world* bound, then convert its center and
+        // radius into attachment-local units before projecting the tip.
+        auto* model = children[0].get();
+        const auto& bound = model->worldBound;
+        const float attachmentScale = std::fabs(attachment->world.scale);
+        if (!std::isfinite(bound.radius) || bound.radius <= 0.0f ||
+            !std::isfinite(attachmentScale) || attachmentScale < 0.001f) {
+            return std::nullopt;
+        }
+
+        const RE::NiPoint3 modelCenter = attachment->world.Invert() * bound.center;
+        const float localRadius = bound.radius / attachmentScale;
+        const float length = std::fabs(modelCenter.y) + localRadius;
+
+        // Invalid / uninitialized bounds should never override hand tracking.
+        // The generous upper bound also excludes wildly incorrect model data.
+        if (!std::isfinite(modelCenter.x) || !std::isfinite(modelCenter.y) ||
+            !std::isfinite(modelCenter.z) || !std::isfinite(length) ||
+            length < 2.0f || length > 500.0f) {
+            return std::nullopt;
+        }
+
+        const RE::NiPoint3 worldTip = attachment->world * RE::NiPoint3{0.0f, length, 0.0f};
+        if (!std::isfinite(worldTip.x) || !std::isfinite(worldTip.y) || !std::isfinite(worldTip.z)) {
+            return std::nullopt;
+        }
+
+        return WeaponTipSample{worldTip, length};
     }
 
+    struct AttackPositionSample {
+        RE::NiPoint3 relativePosition;
+        bool usedWeaponTip{false};
+    };
 
-
-    int ClassifyHandPositionRelativeToPlayer(const RE::NiPoint3& a_handPosition) {
-
-        const float horizontalThreshold = Settings::NPCUI.topThreshold;
-
-
-
-        if (a_handPosition.x > horizontalThreshold) {
-
-            return 3;  // Left
-
+    std::optional<AttackPositionSample> GetTrackedPositionRelativeToReference(RE::Actor* attacker, bool leftHand) {
+        // Mode is only sampled when an indicator/swing event requests a direction.
+        // No continuous tracking or repeated model traversal while Hand is selected.
+        if (AttackTrackingMode::useWeaponTip.load(std::memory_order_relaxed)) {
+            if (const auto tip = GetWeaponTipWorldPosition(attacker, leftHand)) {
+                auto* player = RE::PlayerCharacter::GetSingleton();
+                auto* referenceRoot = player ? player->Get3D(false) : nullptr;
+                auto* referenceChest = GetReferenceChestNode(player);
+                if (referenceRoot && referenceChest) {
+                    const auto inverse = referenceRoot->world.Invert();
+                    const auto localTip = inverse * tip->worldPosition;
+                    const auto localChest = inverse * referenceChest->world.translate;
+                    const RE::NiPoint3 relativeTip{
+                        localTip.x - localChest.x,
+                        localTip.y - localChest.y,
+                        localTip.z - localChest.z
+                    };
+                    if (std::isfinite(relativeTip.x) && std::isfinite(relativeTip.y) &&
+                        std::isfinite(relativeTip.z)) {
+                        return AttackPositionSample{relativeTip, true};
+                    }
+                }
+            }
         }
 
-
-
-        if (a_handPosition.x < -horizontalThreshold) {
-
-            return 2;  // Right
-
-        }
-
-
-
-        return 1;  // Top
-
+        // Hand mode, or weapon unavailable/invalid. Both modes use the same
+        // adjustable head-height AND horizontal-center-band test for Top.
+        const auto hand = GetHandPositionRelativeToReference(attacker, leftHand);
+        if (!hand) return std::nullopt;
+        return AttackPositionSample{*hand, false};
     }
 
+    // Top is deliberately strict in TWO independent dimensions:
+    //   1. Sample Z must be above the player's head plus the height offset.
+    //   2. Sample X must be inside the center band around the player's chest.
+    // A high off-center hit is therefore still Right/Left. No cone-angle math.
+    // Both Hand and Weapon Tip mode use this exact classifier.
+    int ClassifyTrackedPosition(const RE::NiPoint3& relativePosition,
+                                const std::optional<float>& headHeightAboveChest,
+                                bool leftHand, bool isPlayer) {
+        const float heightOffset = std::clamp(
+            AttackTrackingMode::topHeadHeightOffset.load(std::memory_order_relaxed), -100.0f, 100.0f);
+        const float centerHalfWidth = std::clamp(
+            AttackTrackingMode::topCenterHalfWidth.load(std::memory_order_relaxed), 0.0f, 100.0f);
 
+        if (headHeightAboveChest &&
+            relativePosition.z > (*headHeightAboveChest + heightOffset) &&
+            std::abs(relativePosition.x) <= centerHalfWidth) {
+            return 1;  // Top
+        }
+
+        // Maintain existing player/NPC left-right mappings, including the
+        // attacking-hand fallback when the selected point is on center.
+        if (relativePosition.x > 0.5f) return isPlayer ? 2 : 3;
+        if (relativePosition.x < -0.5f) return isPlayer ? 3 : 2;
+        return leftHand ? 3 : 2;
+    }
 
     std::string ToLower(std::string_view a_value) {
 
@@ -282,15 +339,11 @@ namespace {
 
         result.reserve(a_value.size());
 
-
-
         for (const auto character : a_value) {
 
             result.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(character))));
 
         }
-
-
 
         return result;
 
@@ -312,15 +365,11 @@ namespace {
 
     }
 
-
-
     RE::NiAVObject* GetTorsoNode(RE::Actor* actor) {
 
         auto* root = actor ? actor->Get3D(false) : nullptr;
 
         if (!root) return nullptr;
-
-
 
         constexpr const char* kTorsoNames[] = {"NPC Spine1 [Spn1]", "NPC Spine2 [Spn2]", "NPC Spine [Spn0]",
 
@@ -336,15 +385,11 @@ namespace {
 
     }
 
-
-
     bool ProjectToScreenPercent(const RE::NiPoint3& worldPosition, float& xPercent, float& yPercent) {
 
         auto* camera = RE::Main::WorldRootCamera();
 
         if (!camera) return false;
-
-
 
         float normalizedX = 0.0f;
 
@@ -362,8 +407,6 @@ namespace {
 
             return false;
 
-
-
         xPercent = normalizedX * 100.0f;
 
         yPercent = (1.0f - normalizedY) * 100.0f;
@@ -371,8 +414,6 @@ namespace {
         return true;
 
     }
-
-
 
     float GetResolutionScale() {
 
@@ -386,31 +427,46 @@ namespace {
 
     }
 
-
-
     // Visual-only diagnostic. Log a change of HUD outcome immediately and
+
     // repeat unchanged outcomes no more than once per 350ms per NPC.
+
     void LogNpcHudDecision(RE::Actor* actor, std::string_view outcome, std::int32_t direction) {
+
         if (!actor) return;
 
         using Clock = std::chrono::steady_clock;
+
         static std::mutex logMutex;
+
         static std::unordered_map<RE::FormID, std::pair<std::string_view, Clock::time_point>> lastByActor;
 
         const auto now = Clock::now();
+
         {
+
             std::scoped_lock lock(logMutex);
+
             auto& last = lastByActor[actor->GetFormID()];
+
             if (last.first == outcome && now - last.second < std::chrono::milliseconds(350)) return;
+
             last = {outcome, now};
+
         }
 
         const auto target = actor->GetActorRuntimeData().currentCombatTarget.get();
+
         const auto* player = RE::PlayerCharacter::GetSingleton();
+
         SKSE::log::info(
+
             "[NPC TARGET DEBUG] HUD {} actor={:08X} direction={} inCombat={} target={:08X} targetsPlayer={}",
+
             outcome, actor->GetFormID(), direction, actor->IsInCombat(),
+
             target ? target->GetFormID() : 0, player && target && target.get() == player);
+
     }
 
     void AppendWarning(RE::Actor* actor, RE::PlayerCharacter* player, float resolutionScale,
@@ -420,48 +476,124 @@ namespace {
         if (!actor || actor->IsPlayerRef() || actor->IsDead() || actor->IsDisabled()) return;
 
         // Same combat/target gate as before; only its rejection is now observable.
+
         if (!actor->IsInCombat() || !HasPlayerAsCombatTarget(actor, player)) {
+
             std::int32_t debugDirection = 0;
+
             if (actor->GetGraphVariableInt(kAttackDirectionVariable, debugDirection) && debugDirection != 0)
+
                 LogNpcHudDecision(actor, "REJECTED_COMBAT_TARGET", debugDirection);
+
             return;
+
         }
 
+        // NPC defensive animation states belong to the NPC, not the current
+
+        // attack direction. They must remain visible even while direction is 0.
+
+        std::int32_t allBlock = 0;
+
+        std::int32_t unblockable = 0;
+
+        std::int32_t parryActive = 0;
+
+        std::int32_t parryWindow = 0;
+
+        std::int32_t parrySuccess = 0;
+
+        actor->GetGraphVariableInt("AllBlockFHB", allBlock);
+
+        actor->GetGraphVariableInt("UnblockableFHB", unblockable);
+
+        actor->GetGraphVariableInt("ParryActiveFHB", parryActive);
+
+        actor->GetGraphVariableInt("ParryWindowFHB", parryWindow);
+
+        actor->GetGraphVariableInt("ParrySuccessFHB", parrySuccess);
+
+        const bool defensiveVisual = allBlock == 1 || parryActive == 1 || parryWindow == 1 || parrySuccess == 1;
+
+        const bool specialVisual = defensiveVisual || unblockable == 1;
+
+        // NPC guards use an independent native state/graph variable.
+        // This stays valid even if the NPC animation graph lacks NPCBlockDirectionFHB.
+        const std::int32_t blockDirection = NPCDirectionalBlock::GetDirection(actor);
+
+        bool graphBlocking = false;
+        actor->GetGraphVariableBool("IsBlocking", graphBlocking);
+        const bool blocking = actor->IsBlocking() || graphBlocking || blockDirection != 0;
+
         std::int32_t rawDirection = 0;
+
         const bool graphRead = actor->GetGraphVariableInt(kAttackDirectionVariable, rawDirection);
+
         if (!graphRead || rawDirection < 0 || rawDirection > 3) {
-            bool trackedWarning = false;
-            {
-                std::scoped_lock lock(g_attackDirectionsMutex);
-                trackedWarning = g_activeWarnings.contains(actor->GetFormID());
+
+            if (!specialVisual && !blocking) {
+
+                bool trackedWarning = false;
+
+                {
+
+                    std::scoped_lock lock(g_attackDirectionsMutex);
+
+                    trackedWarning = g_activeWarnings.contains(actor->GetFormID());
+
+                }
+
+                if (trackedWarning) LogNpcHudDecision(actor, "REJECTED_GRAPH", rawDirection);
+
+                return;
+
             }
-            if (trackedWarning) LogNpcHudDecision(actor, "REJECTED_GRAPH", rawDirection);
-            return;
+
+            // An NPC doesn't require a defensive direction graph variable.
+
+            rawDirection = 0;
+
         }
-        if (rawDirection == 0 && !Settings::NPCUI.alwaysShowInCombat) {
+
+        if (rawDirection == 0 && !specialVisual && !blocking && !Settings::NPCUI.alwaysShowInCombat) {
+
             bool trackedWarning = false;
+
             {
+
                 std::scoped_lock lock(g_attackDirectionsMutex);
+
                 trackedWarning = g_activeWarnings.contains(actor->GetFormID());
+
             }
+
             if (trackedWarning) LogNpcHudDecision(actor, "REJECTED_DIRECTION_ZERO", rawDirection);
+
             return;
+
         }
 
         const auto* torso = GetTorsoNode(actor);
+
         if (!torso) {
+
             if (rawDirection != 0) LogNpcHudDecision(actor, "REJECTED_NO_TORSO", rawDirection);
+
             return;
+
         }
 
         float xPercent = 50.0f;
+
         float yPercent = 50.0f;
+
         if (!ProjectToScreenPercent(torso->world.translate, xPercent, yPercent)) {
+
             if (rawDirection != 0) LogNpcHudDecision(actor, "REJECTED_PROJECTION", rawDirection);
+
             return;
+
         }
-
-
 
         float distanceScale = 1.0f;
 
@@ -475,29 +607,31 @@ namespace {
 
         }
 
+        // Keep the NPC's offensive direction for normal warning telegraphs.
 
+        // Defensive feedback is independent of the direction value.
 
-        std::int32_t unblockable = 0;
+        AttackWarningVisual visual{actor->GetFormID(), rawDirection,  xPercent, yPercent,
 
-        actor->GetGraphVariableInt("UnblockableFHB", unblockable);
+                                   resolutionScale,    distanceScale, false,    unblockable == 1};
 
-        // Keep the raw graph direction. The shared Shield frontend performs
+        visual.allBlock = allBlock == 1;
 
-        // NPC left/right mirroring exactly once, using its independent setting.
+        visual.parryActive = parryActive == 1;
 
-        warnings.push_back({actor->GetFormID(), rawDirection, xPercent, yPercent, resolutionScale, distanceScale, false,
+        visual.parryWindow = parryWindow == 1;
 
-                            unblockable == 1});
+        visual.parrySuccess = parrySuccess == 1;
+        visual.blockDirection = blockDirection;
+        visual.blocking = blocking;
+
+        warnings.push_back(visual);
 
         if (rawDirection != 0) LogNpcHudDecision(actor, "EMITTED_TO_PRISMA", rawDirection);
 
     }
 
-
-
 }
-
-
 
 AttackPosition* AttackPosition::GetSingleton() {
 
@@ -507,8 +641,6 @@ AttackPosition* AttackPosition::GetSingleton() {
 
 }
 
-
-
 void AttackPosition::ResetAttackDirection(RE::Actor* a_actor) {
 
     if (!a_actor) {
@@ -516,8 +648,6 @@ void AttackPosition::ResetAttackDirection(RE::Actor* a_actor) {
         return;
 
     }
-
-
 
     bool hadAssignedDirection = false;
 
@@ -531,14 +661,11 @@ void AttackPosition::ResetAttackDirection(RE::Actor* a_actor) {
 
         g_activeWarnings.erase(actorID);
 
-
-
         // Release the lock alongside the direction and HUD warning.
+
         g_indicatorDirectionLocked.erase(actorID);
 
     }
-
-
 
     // An already ended attack cannot send another graph write or End update.
 
@@ -546,13 +673,11 @@ void AttackPosition::ResetAttackDirection(RE::Actor* a_actor) {
 
         const bool graphUpdated = a_actor->SetGraphVariableInt(kAttackDirectionVariable, 0);
 
-        SKSE::log::info("[NPC Attack Direction] End actor={:08X} graphUpdated={}", a_actor->GetFormID(), graphUpdated);
+        SKSE::log::info("[Attack Direction] End actor={:08X} graphUpdated={}", a_actor->GetFormID(), graphUpdated);
 
     }
 
 }
-
-
 
 void AttackPosition::ResolveAttackDirection(RE::Actor* a_actor, bool a_leftHand) {
 
@@ -562,99 +687,115 @@ void AttackPosition::ResolveAttackDirection(RE::Actor* a_actor, bool a_leftHand)
 
     }
 
-
-
     const auto actorID = a_actor->GetFormID();
+
+    // All-block and unblockable animations have their own HUD states. Never
+    // assign a normal attack-direction indicator while either is active.
+    std::int32_t allBlock = 0;
+    std::int32_t unblockable = 0;
+    a_actor->GetGraphVariableInt("AllBlockFHB", allBlock);
+    a_actor->GetGraphVariableInt("UnblockableFHB", unblockable);
+    if (allBlock == 1 || unblockable == 1) {
+        ResetAttackDirection(a_actor);
+
+        // ResetAttackDirection deliberately preserves directions owned by an
+        // external moveset. Suppress those too for these special states.
+        std::int32_t existingDirection = 0;
+        if (a_actor->GetGraphVariableInt(kAttackDirectionVariable, existingDirection) && existingDirection != 0) {
+            a_actor->SetGraphVariableInt(kAttackDirectionVariable, 0);
+        }
+        return;
+    }
+
+    // Parry animations may emit the same indicator/swing events as attacks.
+    // Never assign an attack direction when a parry is active.
+    std::int32_t parryActive = 0;
+    std::int32_t parryWindow = 0;
+    a_actor->GetGraphVariableInt("ParryActiveFHB", parryActive);
+    a_actor->GetGraphVariableInt("ParryWindowFHB", parryWindow);
+    if (parryActive == 1 || parryWindow == 1) return;
+
+    // If the player's dedicated from-guard moveset explicitly chose its
+    // direction, keep it. Automatic detection only fills an unset value.
+    if (a_actor->IsPlayerRef()) {
+        std::int32_t explicitDirection = 0;
+        if (a_actor->GetGraphVariableInt(kAttackDirectionVariable, explicitDirection) &&
+            explicitDirection >= 1 && explicitDirection <= 3) {
+            std::scoped_lock lock(g_attackDirectionsMutex);
+            g_indicatorDirectionLocked.insert(actorID);
+            return;
+        }
+    }
 
     {
 
         std::scoped_lock lock(g_attackDirectionsMutex);
 
         if (g_indicatorDirectionLocked.contains(actorID)) {
-            SKSE::log::info("[NPC TARGET DEBUG] RESOLVE_LOCKED actor={:08X} leftHand={}", actorID, a_leftHand);
+
+            SKSE::log::debug("[Attack Direction] RESOLVE_LOCKED actor={:08X} leftHand={}", actorID, a_leftHand);
+
             return;  // Direction already chosen for this swing.
+
         }
 
     }
 
+    const auto sample = GetTrackedPositionRelativeToReference(a_actor, a_leftHand);
 
-
-    const auto handPosition = GetHandPositionRelativeToPlayer(a_actor, a_leftHand);
-
-
-
-    if (!handPosition) {
-
-        SKSE::log::info("[NPC Attack Direction] Resolve failed actor={:08X}: {} hand not found.", a_actor->GetFormID(),
-
-                        a_leftHand ? "left" : "right");
-
-
-
+    if (!sample) {
+        SKSE::log::info("[Attack Direction] Resolve failed actor={:08X}: {} tracking position not found.",
+                        a_actor->GetFormID(), a_leftHand ? "left" : "right");
         return;
-
     }
 
-
-
-    const int direction = ClassifyHandPositionRelativeToPlayer(*handPosition);
-
-
+    const auto headHeightAboveChest = GetPlayerHeadHeightAboveChest();
+    const int direction = ClassifyTrackedPosition(sample->relativePosition, headHeightAboveChest,
+                                                   a_leftHand, a_actor->IsPlayerRef());
 
     {
 
         std::scoped_lock lock(g_attackDirectionsMutex);
 
         if (!g_indicatorDirectionLocked.insert(actorID).second) {
-            SKSE::log::info("[NPC TARGET DEBUG] RESOLVE_LOCK_RACE actor={:08X} leftHand={}", actorID, a_leftHand);
+
+            SKSE::log::debug("[Attack Direction] RESOLVE_LOCK_RACE actor={:08X} leftHand={}", actorID, a_leftHand);
+
             return;  // Another indicator already selected a direction.
+
         }
 
         g_attackDirections[actorID] = direction;
 
-        g_activeWarnings[actorID] = a_actor->GetHandle();
-
-
+        if (!a_actor->IsPlayerRef()) g_activeWarnings[actorID] = a_actor->GetHandle();
 
     }
 
-
-
     const bool graphUpdated = a_actor->SetGraphVariableInt(kAttackDirectionVariable, direction);
 
-
-
-    const auto target = a_actor->GetActorRuntimeData().currentCombatTarget.get();
-
-    const auto* player = RE::PlayerCharacter::GetSingleton();
-
-
-
-    SKSE::log::info(
-
-        "[NPC TARGET DEBUG] RESOLVED actor={:08X} direction={} "
-
-        "inCombat={} target={:08X} targetsPlayer={} graphUpdated={}",
-
-        a_actor->GetFormID(), direction, a_actor->IsInCombat(), target ? target->GetFormID() : 0,
-
-        target && target.get() == player, graphUpdated);
-
-
+    if (!a_actor->IsPlayerRef()) {
+        const auto target = a_actor->GetActorRuntimeData().currentCombatTarget.get();
+        const auto* player = RE::PlayerCharacter::GetSingleton();
+        SKSE::log::info(
+            "[NPC TARGET DEBUG] RESOLVED actor={:08X} direction={} "
+            "inCombat={} target={:08X} targetsPlayer={} graphUpdated={}",
+            a_actor->GetFormID(), direction, a_actor->IsInCombat(), target ? target->GetFormID() : 0,
+            target && target.get() == player, graphUpdated);
+    }
 
     SKSE::log::info(
 
-        "[NPC Attack Direction] NPC {:08X}: hand={} localX={:.2f} localY={:.2f} localZ={:.2f} direction={} "
-
-        "graphUpdated={}.",
-
-        a_actor->GetFormID(), a_leftHand ? "L" : "R", handPosition->x, handPosition->y, handPosition->z, direction,
-
-        graphUpdated);
+        "[Attack Direction] {} {:08X}: hand={} source={} relativeX={:.2f} relativeY={:.2f} "
+        "heightAboveChest={:.2f} headAvailable={} heightAboveHead={:.2f} "
+        "topHeightOffset={:.2f} topCenterHalfWidth={:.2f} direction={} graphUpdated={}.",
+        a_actor->IsPlayerRef() ? "Player" : "NPC", a_actor->GetFormID(), a_leftHand ? "L" : "R",
+        sample->usedWeaponTip ? "weapon-tip" : "hand", sample->relativePosition.x, sample->relativePosition.y,
+        sample->relativePosition.z, headHeightAboveChest.has_value(),
+        headHeightAboveChest ? sample->relativePosition.z - *headHeightAboveChest : 0.0f,
+        AttackTrackingMode::topHeadHeightOffset.load(std::memory_order_relaxed),
+        AttackTrackingMode::topCenterHalfWidth.load(std::memory_order_relaxed), direction, graphUpdated);
 
 }
-
-
 
 RE::BSEventNotifyControl AttackPosition::NpcCycleSink::ProcessEvent(const RE::BSAnimationGraphEvent* a_event,
 
@@ -666,19 +807,13 @@ RE::BSEventNotifyControl AttackPosition::NpcCycleSink::ProcessEvent(const RE::BS
 
     }
 
-
-
     auto* actor = a_event->holder->As<RE::Actor>();
 
-
-
-    if (!actor || actor->IsPlayerRef()) {
+    if (!actor) {
 
         return RE::BSEventNotifyControl::kContinue;
 
     }
-
-
 
     try {
 
@@ -686,18 +821,45 @@ RE::BSEventNotifyControl AttackPosition::NpcCycleSink::ProcessEvent(const RE::BS
 
         const std::string eventName = ToLower(rawEventName);
 
-
-
-        SKSE::log::debug("[NPC Attack Direction] Event actor={:08X} tag={}", actor->GetFormID(), rawEventName);
-
-        // Direction is resolved only on indicator or swing events.
-        if (eventName == "indicatorstart" || eventName == "leftindicatorstart" ||
-            eventName.find("weaponswing") != std::string::npos ||
-            eventName.find("weaponleftswing") != std::string::npos) {
-            SKSE::log::info("[NPC TARGET DEBUG] EVENT actor={:08X} tag={}", actor->GetFormID(), rawEventName);
+        // All-block or unblockable may activate after direction selection.
+        // Clear a stale normal direction on any following animation event.
+        std::int32_t allBlock = 0;
+        std::int32_t unblockable = 0;
+        actor->GetGraphVariableInt("AllBlockFHB", allBlock);
+        actor->GetGraphVariableInt("UnblockableFHB", unblockable);
+        if (allBlock == 1 || unblockable == 1) {
+            AttackPosition::GetSingleton()->ResetAttackDirection(actor);
+            std::int32_t existingDirection = 0;
+            if (actor->GetGraphVariableInt(kAttackDirectionVariable, existingDirection) && existingDirection != 0) {
+                actor->SetGraphVariableInt(kAttackDirectionVariable, 0);
+            }
         }
 
+        SKSE::log::debug("[Attack Direction] Event actor={:08X} tag={}", actor->GetFormID(), rawEventName);
 
+        // Direction is resolved only on indicator or swing events.
+
+        if (eventName == "indicatorstart" || eventName == "leftindicatorstart" ||
+
+            eventName.find("weaponswing") != std::string::npos ||
+
+            eventName.find("weaponleftswing") != std::string::npos) {
+
+            SKSE::log::debug("[Attack Direction] EVENT actor={:08X} tag={}", actor->GetFormID(), rawEventName);
+
+        }
+
+        // Event-driven NPC guard behavior: player attack cue and NPC movement cues.
+        // No additional animation sink, update hook, or per-frame random rolls.
+        if (actor->IsPlayerRef() && eventName == "prehitframe") {
+            NPCDirectionalBlock::OnPlayerPreHitFrame(actor);
+        } else if (!actor->IsPlayerRef() &&
+                   (eventName == "footleft" || eventName == "footright" ||
+                    eventName == "footsprintleft" || eventName == "footsprintright" ||
+                    eventName == "footstep")) {
+            // Footstep annotations are delivered by the actor's existing graph sink.
+            NPCDirectionalBlock::OnFootstep(actor);
+        }
 
         if (eventName == "leftindicatorstart") {
 
@@ -719,39 +881,49 @@ RE::BSEventNotifyControl AttackPosition::NpcCycleSink::ProcessEvent(const RE::BS
 
             AttackPosition::GetSingleton()->ResolveAttackDirection(actor, leftHand);
 
+            // Read AttackDirectionFHB only after the player swing has resolved.
+            // NPC guard reactions are event-driven and obey their own cooldown.
+            if (actor->IsPlayerRef()) NPCDirectionalBlock::OnPlayerWeaponSwing(actor);
 
+        } else if (eventName == "blockstartout" || eventName == "blockstart") {
+
+            AttackPosition::GetSingleton()->ResetAttackDirection(actor);
+
+            if (!actor->IsPlayerRef()) NPCDirectionalBlock::OnBlockStart(actor);
+
+        } else if (eventName == "blockstop") {
+
+            if (!actor->IsPlayerRef()) NPCDirectionalBlock::OnBlockEnd(actor);
 
         } else if (eventName == "mco_winopen" || eventName == "mco_powerwinopen") {
 
             AttackPosition::GetSingleton()->ResetAttackDirection(actor);
 
-        } else if (eventName == "staggerstart" || eventName == "blockstart" || eventName == "attackstop" ||
-
-                   eventName == "sbf_staggerstart") {
-
-            // Existing end/interruption events release direction and lock.
+        } else if (eventName == "staggerstart" || eventName == "attackstop" || eventName == "sbf_staggerstart") {
 
             AttackPosition::GetSingleton()->ResetAttackDirection(actor);
+
+            if (eventName == "staggerstart" || eventName == "sbf_staggerstart") {
+
+                if (!actor->IsPlayerRef()) NPCDirectionalBlock::OnBlockEnd(actor);
+
+            }
 
         }
 
     } catch (const std::exception& e) {
 
-        SKSE::log::error("[NPC Attack Direction] Exception for NPC {:08X}: {}", actor->GetFormID(), e.what());
+        SKSE::log::error("[Attack Direction] Event exception for actor {:08X}: {}", actor->GetFormID(), e.what());
 
     } catch (...) {
 
-        SKSE::log::error("[NPC Attack Direction] Unknown exception for NPC {:08X}.", actor->GetFormID());
+        SKSE::log::error("[Attack Direction] Unknown event exception for actor {:08X}.", actor->GetFormID());
 
     }
-
-
 
     return RE::BSEventNotifyControl::kContinue;
 
 }
-
-
 
 AttackPosition::NpcCycleSink* AttackPosition::NpcCycleSink::GetSingleton() {
 
@@ -760,8 +932,6 @@ AttackPosition::NpcCycleSink* AttackPosition::NpcCycleSink::GetSingleton() {
     return std::addressof(singleton);
 
 }
-
-
 
 // ============================================================================
 
@@ -781,8 +951,6 @@ RE::BSEventNotifyControl AttackPosition::NpcCombatTracker::ProcessEvent(const RE
 
     if (!actor || actor->IsPlayerRef()) return RE::BSEventNotifyControl::kContinue;
 
-
-
     const auto newState = *a_event->newState;
 
     if (newState == RE::ACTOR_COMBAT_STATE::kCombat) {
@@ -801,8 +969,6 @@ RE::BSEventNotifyControl AttackPosition::NpcCombatTracker::ProcessEvent(const RE
 
 }
 
-
-
 AttackPosition::NpcCombatTracker* AttackPosition::NpcCombatTracker::GetSingleton() {
 
     static NpcCombatTracker singleton;
@@ -811,15 +977,24 @@ AttackPosition::NpcCombatTracker* AttackPosition::NpcCombatTracker::GetSingleton
 
 }
 
-
-
 void AttackPosition::RegisterNPCAnimationSink(RE::Actor* a_actor) { RegisterSink(a_actor); }
-
-
 
 void AttackPosition::RegisterSink(RE::Actor* a_actor) {
 
-    if (!a_actor || a_actor->IsPlayerRef() || !a_actor->IsInCombat()) return;
+    if (!a_actor) return;
+
+    if (a_actor->IsPlayerRef()) {
+        if (g_playerSinkRegistered || !a_actor->Is3DLoaded()) return;
+        RE::BSTSmartPointer<RE::BSAnimationGraphManager> graphManager;
+        a_actor->GetAnimationGraphManager(graphManager);
+        if (!graphManager) return;
+        g_playerSinkRegistered = a_actor->AddAnimationGraphEventSink(NpcCycleSink::GetSingleton());
+        if (g_playerSinkRegistered) {
+            SKSE::log::info("[Attack Direction] Player animation sink registered");
+        }
+        return;
+    }
+    if (!a_actor->IsInCombat()) return;
 
     const auto id = a_actor->GetFormID();
 
@@ -830,8 +1005,6 @@ void AttackPosition::RegisterSink(RE::Actor* a_actor) {
         if (g_trackedNPCs.contains(id)) return;
 
     }
-
-
 
     RE::BSTSmartPointer<RE::BSAnimationGraphManager> graphManager;
 
@@ -844,8 +1017,6 @@ void AttackPosition::RegisterSink(RE::Actor* a_actor) {
         return;
 
     }
-
-
 
     const bool registered = a_actor->AddAnimationGraphEventSink(NpcCycleSink::GetSingleton());
 
@@ -869,11 +1040,11 @@ void AttackPosition::RegisterSink(RE::Actor* a_actor) {
 
 }
 
-
-
 void AttackPosition::UnregisterSink(RE::Actor* a_actor) {
 
     if (!a_actor || a_actor->IsPlayerRef()) return;
+
+    NPCDirectionalBlock::OnBlockEnd(a_actor);
 
     const auto id = a_actor->GetFormID();
 
@@ -889,310 +1060,355 @@ void AttackPosition::UnregisterSink(RE::Actor* a_actor) {
 
     }
 
-    if (wasRegistered && a_actor->Is3DLoaded()) a_actor->RemoveAnimationGraphEventSink(NpcCycleSink::GetSingleton());
+    if (wasRegistered && a_actor->Is3DLoaded()) {
 
+        a_actor->RemoveAnimationGraphEventSink(NpcCycleSink::GetSingleton());
+
+    }
 }
-
-
 
 void AttackPosition::RegisterSinksForExistingCombatants() {
 
-    auto* processLists = RE::ProcessLists::GetSingleton();
+        auto* processLists = RE::ProcessLists::GetSingleton();
 
-    if (!processLists) return;
+        if (!processLists) return;
 
-    for (auto& actorHandle : processLists->highActorHandles) {
+        for (auto& actorHandle : processLists->highActorHandles) {
 
-        auto actorPtr = actorHandle.get();
+            auto actorPtr = actorHandle.get();
 
-        auto* actor = actorPtr.get();
+            auto* actor = actorPtr.get();
 
-        if (actor && !actor->IsPlayerRef() && actor->IsInCombat()) RegisterSink(actor);
+            if (actor && !actor->IsPlayerRef() && actor->IsInCombat()) RegisterSink(actor);
 
-    }
-
-}
-
-
-
-RE::BSEventNotifyControl AttackPosition::PC3DLoadEventHandler::ProcessEvent(
-
-    const RE::TESObjectLoadedEvent* a_event, RE::BSTEventSource<RE::TESObjectLoadedEvent>*) {
-
-    if (!a_event) return RE::BSEventNotifyControl::kContinue;
-
-
-
-    auto* form = RE::TESForm::LookupByID(a_event->formID);
-
-    auto* actor = form ? form->As<RE::Actor>() : nullptr;
-
-    if (!actor || actor->IsPlayerRef()) return RE::BSEventNotifyControl::kContinue;
-
-
-
-    if (a_event->loaded) {
-
-        // The graph may not exist until shortly after TESObjectLoadedEvent.
-
-        // Queue a bounded retry checked by the already-installed update hook.
-
-        if (actor->IsInCombat()) QueueRegistration(actor);
-
-    } else {
-
-        // Clear transient state before the actor's next 3D load.
-
-        AttackPosition::GetSingleton()->ResetAttackDirection(actor);
-
-        AttackPosition::GetSingleton()->UnregisterSink(actor);
+        }
 
     }
 
-    return RE::BSEventNotifyControl::kContinue;
+    RE::BSEventNotifyControl AttackPosition::PC3DLoadEventHandler::ProcessEvent(
 
-}
+        const RE::TESObjectLoadedEvent* a_event, RE::BSTEventSource<RE::TESObjectLoadedEvent>*) {
 
+        if (!a_event) return RE::BSEventNotifyControl::kContinue;
 
-
-AttackPosition::PC3DLoadEventHandler* AttackPosition::PC3DLoadEventHandler::GetSingleton() {
-
-    static PC3DLoadEventHandler singleton;
-
-    return std::addressof(singleton);
-
-}
-
-
-
-// ============================================================================
-
-// REGISTRATION AND HUD UPDATE - called from the existing plugin lifecycle/hook
-
-// ============================================================================
-
-void AttackPosition::Initialize() {
-
-    auto* sources = RE::ScriptEventSourceHolder::GetSingleton();
-
-    if (!sources) {
-
-        SKSE::log::warn("[NPC Attack Direction] Event sources unavailable");
-
-        return;
-
-    }
-
-    if (!npcCombatRegistered_) {
-
-        sources->AddEventSink(NpcCombatTracker::GetSingleton());
-
-        npcCombatRegistered_ = true;
-
-    }
-
-    if (!npcLoadRegistered_) {
-
-        sources->AddEventSink(PC3DLoadEventHandler::GetSingleton());
-
-        npcLoadRegistered_ = true;
-
-    }
-
-    RegisterSinksForExistingCombatants();
-
-    SKSE::log::info("[NPC Attack Direction] Initialized (no dispatcher)");
-
-}
-
-
-
-void AttackPosition::OnGameLoaded() {
-
-    // When reloading a save in the same process, detach any old sinks before
-
-    // forgetting their IDs. Otherwise re-registration may be rejected as a
-
-    // duplicate and the new graph will never send indicator events.
-
-    std::vector<RE::FormID> previousTracked;
-
-    {
-
-        std::scoped_lock lock(g_trackedNPCsMutex);
-
-        previousTracked.assign(g_trackedNPCs.begin(), g_trackedNPCs.end());
-
-    }
-
-    for (const auto id : previousTracked) {
-
-        auto* form = RE::TESForm::LookupByID(id);
+        auto* form = RE::TESForm::LookupByID(a_event->formID);
 
         auto* actor = form ? form->As<RE::Actor>() : nullptr;
 
-        if (actor && actor->Is3DLoaded()) actor->RemoveAnimationGraphEventSink(NpcCycleSink::GetSingleton());
+        if (!actor || actor->IsPlayerRef()) return RE::BSEventNotifyControl::kContinue;
 
-    }
+        if (a_event->loaded) {
 
+            // The graph may not exist until shortly after TESObjectLoadedEvent.
 
+            // Queue a bounded retry checked by the already-installed update hook.
 
-    {
+            if (actor->IsInCombat()) QueueRegistration(actor);
 
-        std::scoped_lock lock(g_attackDirectionsMutex);
+        } else {
 
-        g_attackDirections.clear();
+            // Clear transient state before the actor's next 3D load.
 
-        g_activeWarnings.clear();
+            AttackPosition::GetSingleton()->ResetAttackDirection(actor);
 
-        g_indicatorDirectionLocked.clear();
-
-
-
-    }
-
-    {
-
-        std::scoped_lock lock(g_trackedNPCsMutex);
-
-        g_trackedNPCs.clear();
-
-        g_pendingRegistrations.clear();
-
-    }
-
-    Prisma::UpdateAttackWarnings({});
-
-    RegisterSinksForExistingCombatants();
-
-}
-
-
-
-void AttackPosition::UpdateHUD() {
-
-    // Retry only NPCs whose animation graph was unavailable during load.
-
-    // This uses the existing player update, not a dispatcher or separate hook.
-
-    const auto now = std::chrono::steady_clock::now();
-
-    std::vector<RE::ActorHandle> readyToTry;
-
-    {
-
-        std::scoped_lock lock(g_trackedNPCsMutex);
-
-        for (auto it = g_pendingRegistrations.begin(); it != g_pendingRegistrations.end();) {
-
-            if (now < it->second.nextAttempt) {
-
-                ++it;
-
-                continue;
-
-            }
-
-            if (it->second.attempts >= kMaxRegisterAttempts) {
-
-                SKSE::log::warn("[NPC Attack Direction] Registration retry exhausted for {:08X}", it->first);
-
-                it = g_pendingRegistrations.erase(it);
-
-                continue;
-
-            }
-
-            readyToTry.push_back(it->second.actor);
-
-            ++it->second.attempts;
-
-            it->second.nextAttempt = now + kRetryInterval;
-
-            ++it;
+            AttackPosition::GetSingleton()->UnregisterSink(actor);
 
         }
 
-    }
-
-    for (const auto& handle : readyToTry) {
-
-        auto actorPtr = handle.get();
-
-        auto* actor = actorPtr.get();
-
-        if (actor && actor->IsInCombat()) RegisterSink(actor);
+        return RE::BSEventNotifyControl::kContinue;
 
     }
 
+    AttackPosition::PC3DLoadEventHandler* AttackPosition::PC3DLoadEventHandler::GetSingleton() {
 
+        static PC3DLoadEventHandler singleton;
 
-    // No NPC GUI can be derived directly from a JavaScript animation graph.
-
-    // Read each actor's graph direction in C++, then send visual state to Prisma.
-
-    auto* player = RE::PlayerCharacter::GetSingleton();
-
-    auto* ui = RE::UI::GetSingleton();
-
-    if (!Settings::NPCUI.enabled || !player || player->IsDead() || (ui && ui->GameIsPaused())) {
-
-        Prisma::UpdateAttackWarnings({});
-
-        return;
+        return std::addressof(singleton);
 
     }
 
+    // ============================================================================
 
+    // REGISTRATION AND HUD UPDATE - called from the existing plugin lifecycle/hook
 
-    std::vector<AttackWarningVisual> visuals;
+    // ============================================================================
 
-    const float resolutionScale = GetResolutionScale();
+    void AttackPosition::Initialize() {
 
-    if (Settings::NPCUI.alwaysShowInCombat) {
+        auto* sources = RE::ScriptEventSourceHolder::GetSingleton();
 
-        if (auto* lists = RE::ProcessLists::GetSingleton()) {
+        if (!sources) {
 
-            for (auto& handle : lists->highActorHandles) {
+            SKSE::log::warn("[NPC Attack Direction] Event sources unavailable");
 
-                auto actorPtr = handle.get();
-
-                AppendWarning(actorPtr.get(), player, resolutionScale, visuals);
-
-            }
+            return;
 
         }
 
-    } else {
+        if (!npcCombatRegistered_) {
 
-        std::vector<RE::ActorHandle> activeActors;
+            sources->AddEventSink(NpcCombatTracker::GetSingleton());
+
+            npcCombatRegistered_ = true;
+
+        }
+
+        if (!npcLoadRegistered_) {
+
+            sources->AddEventSink(PC3DLoadEventHandler::GetSingleton());
+
+            npcLoadRegistered_ = true;
+
+        }
+
+        RegisterSinksForExistingCombatants();
+        if (auto* player = RE::PlayerCharacter::GetSingleton()) RegisterSink(player);
+
+        SKSE::log::info("[Attack Direction] Initialized (player + NPC event tracking)");
+
+    }
+
+    void AttackPosition::OnGameLoaded() {
+
+        // When reloading a save in the same process, detach any old sinks before
+
+        // forgetting their IDs. Otherwise re-registration may be rejected as a
+
+        // duplicate and the new graph will never send indicator events.
+
+        // A new save/new game can replace the player's animation graph.
+        // Detach from the previous graph before attaching to the new one.
+        if (g_playerSinkRegistered) {
+            if (auto* player = RE::PlayerCharacter::GetSingleton()) {
+                ResetAttackDirection(player);
+                if (player->Is3DLoaded()) player->RemoveAnimationGraphEventSink(NpcCycleSink::GetSingleton());
+            }
+            g_playerSinkRegistered = false;
+        }
+
+        std::vector<RE::FormID> previousTracked;
+
+        {
+
+            std::scoped_lock lock(g_trackedNPCsMutex);
+
+            previousTracked.assign(g_trackedNPCs.begin(), g_trackedNPCs.end());
+
+        }
+
+        for (const auto id : previousTracked) {
+
+            auto* form = RE::TESForm::LookupByID(id);
+
+            auto* actor = form ? form->As<RE::Actor>() : nullptr;
+
+            if (actor && actor->Is3DLoaded()) {
+                NPCDirectionalBlock::OnBlockEnd(actor);
+                actor->RemoveAnimationGraphEventSink(NpcCycleSink::GetSingleton());
+            }
+
+        }
 
         {
 
             std::scoped_lock lock(g_attackDirectionsMutex);
 
-            activeActors.reserve(g_activeWarnings.size());
+            g_attackDirections.clear();
 
-            for (const auto& [id, handle] : g_activeWarnings) activeActors.push_back(handle);
+            g_activeWarnings.clear();
+
+            g_indicatorDirectionLocked.clear();
+
+        }
+
+        {
+
+            std::scoped_lock lock(g_trackedNPCsMutex);
+
+            g_trackedNPCs.clear();
+
+            g_pendingRegistrations.clear();
 
         }
 
-        for (const auto& handle : activeActors) {
+        Prisma::UpdateAttackWarnings({});
+        NPCDirectionalBlock::Reset();
 
-            auto actorPtr = handle.get();
-
-            AppendWarning(actorPtr.get(), player, resolutionScale, visuals);
-
-        }
+        RegisterSinksForExistingCombatants();
+        if (auto* player = RE::PlayerCharacter::GetSingleton()) RegisterSink(player);
 
     }
 
+    void AttackPosition::UpdateHUD() {
 
+        // Player sink installation is independent of NPC combat status.
+        // Retry through the existing update until the player's graph is loaded.
+        if (!g_playerSinkRegistered) {
+            if (auto* player = RE::PlayerCharacter::GetSingleton()) RegisterSink(player);
+        }
 
-    std::ranges::sort(visuals, {}, &AttackWarningVisual::id);
+        // Retry only NPCs whose animation graph was unavailable during load.
 
-    if (visuals.size() > 32) visuals.resize(32);
+        // This uses the existing player update, not a dispatcher or separate hook.
 
-    Prisma::UpdateAttackWarnings(visuals);
+        const auto now = std::chrono::steady_clock::now();
 
-}
+        std::vector<RE::ActorHandle> readyToTry;
+
+        {
+
+            std::scoped_lock lock(g_trackedNPCsMutex);
+
+            for (auto it = g_pendingRegistrations.begin(); it != g_pendingRegistrations.end();) {
+
+                if (now < it->second.nextAttempt) {
+
+                    ++it;
+
+                    continue;
+
+                }
+
+                if (it->second.attempts >= kMaxRegisterAttempts) {
+
+                    SKSE::log::warn("[NPC Attack Direction] Registration retry exhausted for {:08X}", it->first);
+
+                    it = g_pendingRegistrations.erase(it);
+
+                    continue;
+
+                }
+
+                readyToTry.push_back(it->second.actor);
+
+                ++it->second.attempts;
+
+                it->second.nextAttempt = now + kRetryInterval;
+
+                ++it;
+
+            }
+
+        }
+
+        for (const auto& handle : readyToTry) {
+
+            auto actorPtr = handle.get();
+
+            auto* actor = actorPtr.get();
+
+            if (actor && actor->IsInCombat()) RegisterSink(actor);
+
+        }
+
+        // NPC blocking intelligence runs through the existing update hook,
+        // regardless of whether the NPC HUD is enabled.
+        if (auto* processLists = RE::ProcessLists::GetSingleton()) {
+            for (auto& handle : processLists->highActorHandles) {
+                auto actorPtr = handle.get();
+                auto* npc = actorPtr.get();
+                if (npc && !npc->IsPlayerRef()) {
+                    NPCDirectionalBlock::Update(npc);
+                }
+            }
+        }
+
+        // No NPC GUI can be derived directly from a JavaScript animation graph.
+
+        // Read each actor's graph direction in C++, then send visual state to Prisma.
+
+        auto* player = RE::PlayerCharacter::GetSingleton();
+
+        auto* ui = RE::UI::GetSingleton();
+
+        if (!Settings::NPCUI.enabled || !player || player->IsDead() || (ui && ui->GameIsPaused())) {
+
+            Prisma::UpdateAttackWarnings({});
+
+            return;
+
+        }
+
+        std::vector<AttackWarningVisual> visuals;
+
+        const float resolutionScale = GetResolutionScale();
+
+        if (Settings::NPCUI.alwaysShowInCombat) {
+
+            if (auto* lists = RE::ProcessLists::GetSingleton()) {
+
+                for (auto& handle : lists->highActorHandles) {
+
+                    auto actorPtr = handle.get();
+
+                    AppendWarning(actorPtr.get(), player, resolutionScale, visuals);
+
+                }
+
+            }
+
+        } else {
+
+            std::vector<RE::ActorHandle> activeActors;
+
+            {
+
+                std::scoped_lock lock(g_attackDirectionsMutex);
+
+                activeActors.reserve(g_activeWarnings.size());
+
+                for (const auto& [id, handle] : g_activeWarnings) activeActors.push_back(handle);
+
+            }
+
+            // The existing active-warning map only contains attacking NPCs.
+
+            // Also inspect already-tracked combatants so all-block/parries appear
+
+            // even when the NPC has no attack-direction indicator.
+
+            std::vector<RE::FormID> trackedNPCs;
+
+            {
+
+                std::scoped_lock lock(g_trackedNPCsMutex);
+
+                trackedNPCs.assign(g_trackedNPCs.begin(), g_trackedNPCs.end());
+
+            }
+
+            std::unordered_set<RE::FormID> visited;
+
+            for (const auto& handle : activeActors) {
+
+                auto actorPtr = handle.get();
+
+                auto* actor = actorPtr.get();
+
+                if (actor && visited.insert(actor->GetFormID()).second)
+
+                    AppendWarning(actor, player, resolutionScale, visuals);
+
+            }
+
+            for (const auto id : trackedNPCs) {
+
+                if (!visited.insert(id).second) continue;
+
+                auto* form = RE::TESForm::LookupByID(id);
+
+                auto* actor = form ? form->As<RE::Actor>() : nullptr;
+
+                if (actor && actor->Is3DLoaded()) AppendWarning(actor, player, resolutionScale, visuals);
+
+            }
+
+        }
+
+        std::ranges::sort(visuals, {}, &AttackWarningVisual::id);
+
+        if (visuals.size() > 32) visuals.resize(32);
+
+        Prisma::UpdateAttackWarnings(visuals);
+
+    }

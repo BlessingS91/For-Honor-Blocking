@@ -12,6 +12,8 @@
 
 #include <cstdio>
 
+#include "AttackCancel.h"
+#include "AttackTrackingMode.h"
 #include "InputTracking.h"
 
 #include "logger.h"
@@ -97,6 +99,8 @@ namespace Settings {
         constexpr const char* kSection = "Blocking";
 
         constexpr const char* kInputTrackingSection = "InputTracking";
+
+        constexpr const char* kAttackCancelSection = "AttackCancel";
 
         constexpr const char* kConfigPath = "Data/SKSE/Plugins/ForHonorBlocking.ini";
 
@@ -622,11 +626,38 @@ namespace Settings {
 
         InputTrackingTuning::Set(tuning);
 
+        // [AttackCancel] - in the same ForHonorBlocking.ini.
+        auto& cancel = AttackCancel::GetConfig();
+        cancel.enabled = ReadHudBool(kAttackCancelSection, "Enabled", cancel.enabled);
+        cancel.windowMs = std::clamp(
+            ReadHudInt(kAttackCancelSection, "WindowMs", cancel.windowMs), 0, 1000);
+        const float staminaCost = GetFloatInSection(
+            kAttackCancelSection, "StaminaCost", cancel.staminaCost);
+        cancel.staminaCost = std::isfinite(staminaCost)
+            ? std::clamp(staminaCost, 0.0f, 100.0f)
+            : AttackCancel::Config{}.staminaCost;
+
         // Player/NPC HUD settings are independent.
 
         LoadHudPlayer();
 
         LoadHudNpc();
+
+        // Player + NPC use the same head-height and horizontal center band.
+        // Use fresh keys rather than interpreting the old TopConeDegrees as distance.
+        const float savedTopHeadOffset = GetFloat("TopHeadHeightOffset", 0.0f);
+        AttackTrackingMode::topHeadHeightOffset.store(
+            std::isfinite(savedTopHeadOffset) ? std::clamp(savedTopHeadOffset, -100.0f, 100.0f) : 0.0f,
+            std::memory_order_relaxed);
+        const float savedTopCenter = GetFloat("TopCenterHalfWidth", 15.0f);
+        AttackTrackingMode::topCenterHalfWidth.store(
+            std::isfinite(savedTopCenter) ? std::clamp(savedTopCenter, 0.0f, 100.0f) : 15.0f,
+            std::memory_order_relaxed);
+
+        // Hand (default) or estimated visual weapon tip. Applies to both
+        // player and NPC attack-direction tracking.
+        AttackTrackingMode::useWeaponTip.store(
+            ReadHudBool(kSection, "UseWeaponTipTracking", false), std::memory_order_relaxed);
 
         logger::info(
 
@@ -682,6 +713,14 @@ namespace Settings {
 
         WriteString("SuperiorBlockPerk", superiorBlockPerk);
 
+        // Shared player/NPC Top thresholds (game units).
+        WriteFloat("TopHeadHeightOffset", std::clamp(
+            AttackTrackingMode::topHeadHeightOffset.load(std::memory_order_relaxed), -100.0f, 100.0f));
+        WriteFloat("TopCenterHalfWidth", std::clamp(
+            AttackTrackingMode::topCenterHalfWidth.load(std::memory_order_relaxed), 0.0f, 100.0f));
+        WriteHudBool(kSection, "UseWeaponTipTracking",
+                     AttackTrackingMode::useWeaponTip.load(std::memory_order_relaxed));
+
         // [Blocking] - stamina cost by weapon type.
 
         WriteFloat("StaminaOneHandSword", staminaOneHandSword);
@@ -733,6 +772,15 @@ namespace Settings {
         WriteInputTrackingInt("DirectionSwitchDelayMs", tuning.directionSwitchDelayMs);
 
         WriteInputTrackingInt("NeutralDecayMs", tuning.neutralDecayMs);
+
+        // [AttackCancel] - persist the module's own options.
+        const auto& cancel = AttackCancel::GetConfig();
+        WriteHudBool(kAttackCancelSection, "Enabled", cancel.enabled);
+        WriteHudInt(kAttackCancelSection, "WindowMs", std::clamp(cancel.windowMs, 0, 1000));
+        WriteFloatInSection(kAttackCancelSection, "StaminaCost",
+                            std::isfinite(cancel.staminaCost)
+                                ? std::clamp(cancel.staminaCost, 0.0f, 100.0f)
+                                : AttackCancel::Config{}.staminaCost);
 
         SaveHudPlayer();
 
@@ -798,9 +846,14 @@ namespace Settings {
 
         InputTrackingTuning::Reset();
 
+        AttackCancel::GetConfig() = AttackCancel::Config{};
+
         PlayerUI = PlayerUISettings{};
 
         NPCUI = NPCUISettings{};
+        AttackTrackingMode::topHeadHeightOffset.store(0.0f, std::memory_order_relaxed);
+        AttackTrackingMode::topCenterHalfWidth.store(15.0f, std::memory_order_relaxed);
+        AttackTrackingMode::useWeaponTip.store(false, std::memory_order_relaxed);
 
     }
 

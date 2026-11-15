@@ -46,10 +46,10 @@ RE::BSEventNotifyControl MCO::ProcessEvent(const RE::BSAnimationGraphEvent* a_ev
         g_guardResumeDispatched.store(false);
     }
 
-    // Resume guarding only when an MCO attack window closes.
-    if (tag == "MCO_WinClose" || tag == "MCO_PowerWinClose") {
-        ProcessBlock(tag);
-    }
+    // // Resume guarding only when an MCO attack window closes.
+    // if (tag == "MCO_WinClose" || tag == "MCO_PowerWinClose") {
+    //     ProcessBlock(tag);
+    // }
 
     return RE::BSEventNotifyControl::kContinue;
 }
@@ -58,6 +58,15 @@ void MCO::ProcessBlock(std::string_view a_eventTag) {
     auto* player = RE::PlayerCharacter::GetSingleton();
 
     if (!player) {
+        return;
+    }
+
+    // From-block attacks manage their own blocking transitions.
+    // Do not automatically resume guarding during this custom state.
+    std::int32_t fromBlockAttack = 0;
+    player->GetGraphVariableInt("FHB_BlockPowerAttack", fromBlockAttack);
+
+    if (fromBlockAttack == 1) {
         return;
     }
 

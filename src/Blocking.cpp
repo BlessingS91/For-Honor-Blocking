@@ -7,8 +7,10 @@
 #include <string>
 #include <utility>
 
+#include "AttackTrackingMode.h"
 #include "DirectionalHandler.h"
 #include "Gameplay.h"
+#include "NPCDirectionalBlock.h"
 #include "Parry.h"
 #include "PoiseAPI.h"
 #include "Settings.h"
@@ -111,14 +113,19 @@ namespace Blocking {
             if (!aggressor || !defender) {
                 return result;
             }
-            // Unblockables are handled first, regardless of the defender's guard.
-            // They cannot be parried or processed as normal directional blocks.
-            // Damage and other numerical effects remain with perks.
-            if (Unblockables::OnPrecisionPreHit(aggressor, defender)) {
+            // Player-only unblockables must bypass parry and directional blocking.
+            // A reaction can be selected even against a defender who is not blocking.
+            if (aggressor->IsPlayerRef() && Unblockables::IsUnblockable(aggressor)) {
+                Unblockables::OnPrecisionPreHit(aggressor, defender);
+                // Unblockables force a reaction but deal no direct weapon HP damage.
+                result.modifiers.push_back({
+                    PRECISION_API::PreHitModifier::ModifierType::Damage,
+                    PRECISION_API::PreHitModifier::ModifierOperation::Multiplicative,
+                    0.0f
+                });
                 NotifyHonorCombatReset(aggressor);
                 return result;
             }
-
             std::int32_t parryWindow = 0;
             std::int32_t parryState = 0;
             std::int32_t parrySuccess = 0;
@@ -157,12 +164,14 @@ namespace Blocking {
             std::int32_t attackDirection = 0;
             std::int32_t blockDirection = 0;
             const bool gotAttackDirection = aggressor->GetGraphVariableInt("AttackDirectionFHB", attackDirection);
-            const bool gotBlockDirection = defender->GetGraphVariableInt("CameraMovementFHB", blockDirection);
-            // Unblockables already returned from this callback above.
+            const bool npcDefender = !defender->IsPlayerRef();
+            const bool gotBlockDirection = npcDefender
+                ? ((blockDirection = NPCDirectionalBlock::GetDirection(defender)) != 0)
+                : defender->GetGraphVariableInt("CameraMovementFHB", blockDirection);
             if (!gotAttackDirection || (!gotBlockDirection && allBlock != 1)) {
                 if (Settings::debugLogging) {
                     logger::info(
-                        "PRECISION BLOCK | Direction read failed | AttackDirectionFHB={} | CameraMovementFHB={}",
+                        "PRECISION BLOCK | Direction read failed | AttackDirectionFHB={} | DefenderDirection={}",
                         gotAttackDirection ? std::to_string(attackDirection) : "FAILED",
                         gotBlockDirection ? std::to_string(blockDirection) : "FAILED");
                 }
@@ -173,8 +182,9 @@ namespace Blocking {
                 "BlockDirection={}",
                 defender->GetName(), defender->IsBlocking(), gotAttackDirection, attackDirection, gotBlockDirection,
                 blockDirection);
-            const bool successful =
-                DirectionalHandler::IsSuccessfulBlock(attackDirection, blockDirection, allBlock == 1, false);
+            const bool successful = npcDefender
+                ? NPCDirectionalBlock::IsSuccessfulBlock(attackDirection, defender, allBlock == 1)
+                : DirectionalHandler::IsSuccessfulBlock(attackDirection, blockDirection, allBlock == 1, false);
             const bool powerAttack = aggressor->IsPowerAttacking();
             const auto* actorValueOwner = defender->AsActorValueOwner();
             const float blockSkillLevel =
@@ -189,7 +199,7 @@ namespace Blocking {
             }
             if (Settings::debugLogging) {
                 logger::info(
-                    "PRECISION BLOCK | AttackDirectionFHB={} ({}) | CameraMovementFHB={} ({}) | Type={} | RESULT={}",
+                    "PRECISION BLOCK | AttackDirectionFHB={} ({}) | DefenderDirection={} ({}) | Type={} | RESULT={}",
                     attackDirection, GraphDirectionName(attackDirection), blockDirection,
                     GraphDirectionName(blockDirection), powerAttack ? "POWER" : "LIGHT",
                     successful ? "SUCCESS" : "FAIL");
@@ -245,6 +255,11 @@ namespace Blocking {
         if (!attacker || !target) {
             return damage;
         }
+        // The blocking module does not modify poise damage for player unblockables.
+        // This passes through the original poise damage; it does NOT zero it out.
+        if (attacker->IsPlayerRef() && Unblockables::IsUnblockable(attacker)) {
+            return damage;
+        }
         std::int32_t allBlock = 0;
         target->GetGraphVariableInt("AllBlockFHB", allBlock);
         if (!target->IsBlocking() && allBlock != 1) {
@@ -253,12 +268,17 @@ namespace Blocking {
         std::int32_t attackDirection = 0;
         std::int32_t blockDirection = 0;
         const bool gotAttackDirection = attacker->GetGraphVariableInt("AttackDirectionFHB", attackDirection);
-        const bool gotBlockDirection = target->GetGraphVariableInt("CameraMovementFHB", blockDirection);
-        const bool unblockable = Unblockables::IsUnblockable(attacker);
+        const bool npcDefender = !target->IsPlayerRef();
+        const bool gotBlockDirection = npcDefender
+            ? ((blockDirection = NPCDirectionalBlock::GetDirection(target)) != 0)
+            : target->GetGraphVariableInt("CameraMovementFHB", blockDirection);
         if (!gotAttackDirection || (!gotBlockDirection && allBlock != 1)) {
             return damage;
         }
-        if (!DirectionalHandler::IsSuccessfulBlock(attackDirection, blockDirection, allBlock == 1, unblockable)) {
+        const bool successful = npcDefender
+            ? NPCDirectionalBlock::IsSuccessfulBlock(attackDirection, target, allBlock == 1)
+            : DirectionalHandler::IsSuccessfulBlock(attackDirection, blockDirection, allBlock == 1, false);
+        if (!successful) {
             return damage;
         }
         const auto* actorValueOwner = target->AsActorValueOwner();
@@ -301,6 +321,30 @@ namespace Blocking {
     void RenderSettings() {
         namespace ui = ImGuiMCP;
         ui::Text("For Honor Blocking");
+        ui::Separator();
+
+        ui::Text("Attack Direction Detection - Player + NPC");
+        bool useWeaponTip = AttackTrackingMode::useWeaponTip.load(std::memory_order_relaxed);
+        if (ui::Checkbox("Use Weapon Tip Tracking (unchecked = Hand)", &useWeaponTip)) {
+            AttackTrackingMode::useWeaponTip.store(useWeaponTip, std::memory_order_relaxed);
+            Settings::Save();
+        }
+        ui::Text("Weapon Tip uses the equipped weapon model; falls back to Hand if unavailable.");
+        ui::Text("Top requires BOTH: above the player's head and within the center band.");
+        ui::Text("Higher head offset = harder Top; wider center band = easier Top.");
+        float topHeadHeightOffset = AttackTrackingMode::topHeadHeightOffset.load(std::memory_order_relaxed);
+        if (ui::SliderFloat("Top - Head Height Offset (game units)",
+                            &topHeadHeightOffset, -100.0f, 100.0f, "%.1f")) {
+            AttackTrackingMode::topHeadHeightOffset.store(topHeadHeightOffset, std::memory_order_relaxed);
+            Settings::Save();
+        }
+        float topCenterHalfWidth = AttackTrackingMode::topCenterHalfWidth.load(std::memory_order_relaxed);
+        if (ui::SliderFloat("Top - Center Half-Width (game units)",
+                            &topCenterHalfWidth, 0.0f, 100.0f, "%.1f")) {
+            AttackTrackingMode::topCenterHalfWidth.store(topCenterHalfWidth, std::memory_order_relaxed);
+            Settings::Save();
+        }
+
         ui::Separator();
         ui::Text("Damage Reduction from Block Skill");
         ui::Text("Controls how much damage is reduced based on the defender's Block skill.");

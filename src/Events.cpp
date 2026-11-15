@@ -16,10 +16,10 @@
 namespace {
     using namespace std::chrono_literals;
 
-    constexpr float kParryBaseDurationMs = 500.0f;
-    constexpr float kParryScalingMsPerLevel = 2.0f;
+    constexpr float kParryBaseDurationMs = 2000.0f;
+    constexpr float kParryScalingMsPerLevel = 4.0f;
 
-    constexpr float kAllBlockBaseDurationMs = 250.0f;
+    constexpr float kAllBlockBaseDurationMs = 2000.0f;
     constexpr float kAllBlockScalingMsPerLevel = 4.0f;
 
     std::chrono::milliseconds GetScaledDuration(RE::Actor* actor, float baseDuration, float scaling) {
@@ -88,14 +88,10 @@ namespace {
 }
 
 namespace FHB {
-    void Events::ActivateParryKnockdown(RE::Actor* actor) {
-        ActivateWindow(actor, "ParryKnockdownFHB", 3, 200ms);
-    }
+    void Events::ActivateParryKnockdown(RE::Actor* actor) { ActivateWindow(actor, "ParryKnockdownFHB", 3, 200ms); }
 
     // Retained for other existing call sites; no longer used for unblockable reactions.
-    void Events::ActivateGuardBroken(RE::Actor* actor) {
-        ActivateWindow(actor, "GuardBrokenFHB", 4, 2000ms);
-    }
+    void Events::ActivateGuardBroken(RE::Actor* actor) { ActivateWindow(actor, "GuardBrokenFHB", 4, 2000ms); }
 
     void Events::ActivateUnblockableReaction(RE::Actor* actor, int reaction) {
         if (reaction != 1 && reaction != 2) {
@@ -134,33 +130,24 @@ namespace FHB {
         if (actor->IsPlayerRef()) {
             if (tag == "preHitFrame") {
                 AttackDirectionLock::Lock();
-            } else if (tag == "MCO_WinOpen" || tag == "MCO_PowerWinOpen" ||
-                       tag == "MCO_Recovery" || tag == "MCO_EndAnimation" ||
-                       tag == "attackStop" || tag == "StaggerStart" || tag == "staggerStart" ||
-                       tag == "blockStartOut" ||
-                       tag == "recoilStart" || tag == "recoilLargeStart" ||
-                       tag == "SBF_ReadyStart" || tag == "sbf_readyStart" ||
-                       tag == "SBF_DefaultStart" ||
-                       tag == "SBF_NormalAttackStop" || tag == "SBF_PowerAttackStop" ||
-                       tag == "SBF_BlockStop" ||
-                       tag == "SBF_BashStart" || tag == "SBF_BashIntroStart" ||
-                       tag == "SBF_BashPowerStart" || tag == "SBF_StaggerStart" ||
-                       tag == "SBF_UnequipStart" || tag == "SBF_ShoutStart" ||
-                       tag == "SBF_CastStart" ||
-                       tag == "SBF_BowAttackStart" || tag == "SBF_CrossbowAttackStart" ||
-                       tag == "SBF_CrossbowReloadStart" ||
-                       tag == "SBF_LeftEquip" || tag == "SBF_RightEquip" ||
-                       tag == "SBF_MagicWeapEquip" ||
-                       tag == "SBF_EnterBed" || tag == "SBF_ExitBed" ||
-                       tag == "SBF_EnterBedroll" || tag == "SBF_ExitBedroll" ||
-                       tag == "SBF_SwimStart" || tag == "SBF_MountStart" ||
-                       tag == "SBF_DismountStart" || tag == "SBF_BleedOutStart") {
+            } else if (tag == "MCO_WinOpen" || tag == "MCO_PowerWinOpen" || tag == "MCO_Recovery" ||
+                       tag == "MCO_EndAnimation" || tag == "attackStop" || tag == "StaggerStart" ||
+                       tag == "staggerStart" || tag == "blockStartOut" || tag == "recoilStart" ||
+                       tag == "recoilLargeStart" || tag == "SBF_ReadyStart" || tag == "sbf_readyStart" ||
+                       tag == "SBF_DefaultStart" || tag == "SBF_NormalAttackStop" || tag == "SBF_PowerAttackStop" ||
+                       tag == "SBF_BlockStop" || tag == "SBF_BashStart" || tag == "SBF_BashIntroStart" ||
+                       tag == "SBF_BashPowerStart" || tag == "SBF_StaggerStart" || tag == "SBF_UnequipStart" ||
+                       tag == "SBF_ShoutStart" || tag == "SBF_CastStart" || tag == "SBF_BowAttackStart" ||
+                       tag == "SBF_CrossbowAttackStart" || tag == "SBF_CrossbowReloadStart" || tag == "SBF_LeftEquip" ||
+                       tag == "SBF_RightEquip" || tag == "SBF_MagicWeapEquip" || tag == "SBF_EnterBed" ||
+                       tag == "SBF_ExitBed" || tag == "SBF_EnterBedroll" || tag == "SBF_ExitBedroll" ||
+                       tag == "SBF_SwimStart" || tag == "SBF_MountStart" || tag == "SBF_DismountStart" ||
+                       tag == "SBF_BleedOutStart") {
                 // Do not unlock on WinClose or attack/block start events:
                 // these can fire while the current animation is committed.
                 AttackDirectionLock::Unlock();
             }
         }
-
 
         if (actor->IsPlayerRef()) {
             PowerAttackKey::OnPlayerAnimationEvent(tag.c_str());
@@ -203,18 +190,15 @@ namespace FHB {
 
         } else if (tag == "MCO_WinOpen" || tag == "MCO_WinClose" || tag == "MCO_PowerWinOpen" ||
                    tag == "MCO_PowerWinClose" || tag == "MCO_Recovery" || tag == "StaggerStart" ||
-                   tag == "BlockStart" || tag == "recoilStart" || tag == "attackStop" ||
-                   tag == "SBF_ReadyStart" || tag == "sbf_readyStart" || tag == "SBF_DefaultStart" ||
-                   tag == "SBF_NormalAttackStart" || tag == "SBF_PowerAttackStart" ||
-                   tag == "SBF_NormalAttackStop" || tag == "SBF_PowerAttackStop" ||
-                   tag == "SBF_BlockStart" || tag == "SBF_BlockStop" ||
-                   tag == "SBF_BashStart" || tag == "SBF_BashIntroStart" || tag == "SBF_BashPowerStart" ||
-                   tag == "SBF_StaggerStart" || tag == "SBF_UnequipStart" ||
-                   tag == "SBF_ShoutStart" || tag == "SBF_CastStart" ||
+                   tag == "BlockStart" || tag == "recoilStart" || tag == "attackStop" || tag == "SBF_ReadyStart" ||
+                   tag == "sbf_readyStart" || tag == "SBF_DefaultStart" || tag == "SBF_NormalAttackStart" ||
+                   tag == "SBF_PowerAttackStart" || tag == "SBF_NormalAttackStop" || tag == "SBF_PowerAttackStop" ||
+                   tag == "SBF_BlockStart" || tag == "SBF_BlockStop" || tag == "SBF_BashStart" ||
+                   tag == "SBF_BashIntroStart" || tag == "SBF_BashPowerStart" || tag == "SBF_StaggerStart" ||
+                   tag == "SBF_UnequipStart" || tag == "SBF_ShoutStart" || tag == "SBF_CastStart" ||
                    tag == "SBF_BowAttackStart" || tag == "SBF_CrossbowAttackStart" ||
-                   tag == "SBF_CrossbowReloadStart" ||
-                   tag == "SBF_LeftEquip" || tag == "SBF_RightEquip" || tag == "SBF_MagicWeapEquip" ||
-                   tag == "SBF_EnterBed" || tag == "SBF_EnterBedroll" ||
+                   tag == "SBF_CrossbowReloadStart" || tag == "SBF_LeftEquip" || tag == "SBF_RightEquip" ||
+                   tag == "SBF_MagicWeapEquip" || tag == "SBF_EnterBed" || tag == "SBF_EnterBedroll" ||
                    tag == "SBF_SwimStart" || tag == "SBF_MountStart" || tag == "SBF_DismountStart" ||
                    tag == "SBF_BleedOutStart") {
             actor->SetGraphVariableInt("ParryWindowFHB", 0);

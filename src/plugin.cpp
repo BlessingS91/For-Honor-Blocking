@@ -1,3 +1,4 @@
+#include "AttackCancel.h"
 #include "AttackPosition.h"
 #include "BlockBehavior.h"
 #include "BlockKey.h"
@@ -60,6 +61,8 @@ void OnMessage(SKSE::MessagingInterface::Message* message) {
 
             // Initialize NPC attack-direction tracking.
             AttackPosition::GetSingleton()->Initialize();
+
+            AttackCancel::Install();
 
             break;
         }

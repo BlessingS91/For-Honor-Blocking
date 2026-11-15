@@ -1,13 +1,14 @@
+
 #include "Hooks.h"
 
 #include <cstdint>
 
+#include "AttackCancel.h"
 #include "AttackPosition.h"
 #include "InputTracking.h"
 #include "PowerAttackKey.h"
 #include "Prisma.h"
 #include "TDMLockBridge.h"
-#include "logger.h"
 
 // PowerAttackKey owns its queued attack transition logic. The shared update
 // hook only dispatches to it and the other independent systems.
@@ -30,6 +31,7 @@ namespace Hooks {
                 DirectionTracker::GetSingleton()->UpdateDecay();
                 Prisma::UpdatePlayerHUD();
                 AttackPosition::GetSingleton()->UpdateHUD();
+                AttackCancel::Update();
             }
 
             static inline Update_t func = nullptr;
@@ -43,8 +45,8 @@ namespace Hooks {
         }
 
         REL::Relocation<std::uintptr_t> vtable{RE::VTABLE_PlayerCharacter[0]};
-        PlayerUpdateHook::func = reinterpret_cast<PlayerUpdateHook::Update_t>(
-            vtable.write_vfunc(0xAD, PlayerUpdateHook::thunk));
+        PlayerUpdateHook::func =
+            reinterpret_cast<PlayerUpdateHook::Update_t>(vtable.write_vfunc(0xAD, PlayerUpdateHook::thunk));
 
         installed = true;
         logger::info("[For Honor Combat] Shared PlayerCharacter::Update hook installed");
