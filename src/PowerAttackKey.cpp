@@ -175,7 +175,7 @@ namespace {
         if (!player) return false;
 
         std::int32_t direction = 0;
-        return player->GetGraphVariableInt("CameraDirectionFHB", direction) && direction == 0;
+        return player->GetGraphVariableInt("CameraMovementFHB", direction) && direction == 0;
     }
 
     void ResetFromBlockAttack(PlayerCharacter* player, const char* /*reason*/) {

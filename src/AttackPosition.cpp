@@ -60,13 +60,11 @@ namespace {
 
 
 
-    // One indicator chooses each swing's direction until the next attack starts.
+    // Lock direction after the first indicator/swing, until an existing release event.
 
     std::unordered_set<RE::FormID> g_indicatorDirectionLocked;
 
-    std::unordered_set<RE::FormID> g_swingCompleted;
 
-    std::unordered_set<RE::FormID> g_awaitingNextAttackStart;
 
 
 
@@ -535,21 +533,8 @@ void AttackPosition::ResetAttackDirection(RE::Actor* a_actor) {
 
 
 
-        // Clearing the graph/HUD is not permission to choose again. In the
-
-        // previous implementation, erasing this lock caused one animation
-
-        // with multiple indicator events to repeatedly change its direction.
-
-        if (hadAssignedDirection || g_indicatorDirectionLocked.contains(actorID)) {
-
-            g_indicatorDirectionLocked.insert(actorID);
-
-            g_awaitingNextAttackStart.insert(actorID);
-
-        }
-
-        g_swingCompleted.erase(actorID);
+        // Release the lock alongside the direction and HUD warning.
+        g_indicatorDirectionLocked.erase(actorID);
 
     }
 
@@ -586,9 +571,7 @@ void AttackPosition::ResolveAttackDirection(RE::Actor* a_actor, bool a_leftHand)
         std::scoped_lock lock(g_attackDirectionsMutex);
 
         if (g_indicatorDirectionLocked.contains(actorID)) {
-            SKSE::log::info(
-                "[NPC TARGET DEBUG] RESOLVE_LOCKED actor={:08X} leftHand={} swingCompleted={} awaitingNextAttackStart={}",
-                actorID, a_leftHand, g_swingCompleted.contains(actorID), g_awaitingNextAttackStart.contains(actorID));
+            SKSE::log::info("[NPC TARGET DEBUG] RESOLVE_LOCKED actor={:08X} leftHand={}", actorID, a_leftHand);
             return;  // Direction already chosen for this swing.
         }
 
@@ -631,9 +614,7 @@ void AttackPosition::ResolveAttackDirection(RE::Actor* a_actor, bool a_leftHand)
 
         g_activeWarnings[actorID] = a_actor->GetHandle();
 
-        g_swingCompleted.erase(actorID);
 
-        g_awaitingNextAttackStart.erase(actorID);
 
     }
 
@@ -709,10 +690,9 @@ RE::BSEventNotifyControl AttackPosition::NpcCycleSink::ProcessEvent(const RE::BS
 
         SKSE::log::debug("[NPC Attack Direction] Event actor={:08X} tag={}", actor->GetFormID(), rawEventName);
 
-        // Log only lifecycle events relevant to an unseen first combo hit.
+        // Direction is resolved only on indicator or swing events.
         if (eventName == "indicatorstart" || eventName == "leftindicatorstart" ||
-            eventName == "attackstart" || eventName == "mco_attackstart" ||
-            eventName == "scar_combostart" || eventName.find("weaponswing") != std::string::npos ||
+            eventName.find("weaponswing") != std::string::npos ||
             eventName.find("weaponleftswing") != std::string::npos) {
             SKSE::log::info("[NPC TARGET DEBUG] EVENT actor={:08X} tag={}", actor->GetFormID(), rawEventName);
         }
@@ -741,91 +721,15 @@ RE::BSEventNotifyControl AttackPosition::NpcCycleSink::ProcessEvent(const RE::BS
 
 
 
-            std::scoped_lock lock(g_attackDirectionsMutex);
-
-            const auto actorID = actor->GetFormID();
-
-            if (g_attackDirections.contains(actorID)) {
-
-                g_swingCompleted.insert(actorID);
-
-            }
-
-        } else if (eventName == "attackstart" || eventName == "mco_attackstart" || eventName == "scar_combostart") {
-
-            // Only a distinct attack start AFTER a previous swing or End
-
-            // allows another indicator. Repeated starts BEFORE weaponSwing
-
-            // do not re-arm the current attack.
-
-            bool hadAssignedDirection = false;
-
-            {
-
-                std::scoped_lock lock(g_attackDirectionsMutex);
-
-                const auto actorID = actor->GetFormID();
-
-                const bool previousSwingFinished = g_swingCompleted.erase(actorID) != 0;
-
-                const bool previousAttackEnded = g_awaitingNextAttackStart.erase(actorID) != 0;
-
-                if (previousSwingFinished || previousAttackEnded) {
-
-                    hadAssignedDirection = g_attackDirections.erase(actorID) != 0;
-
-                    g_activeWarnings.erase(actorID);
-
-                    g_indicatorDirectionLocked.erase(actorID);
-
-                }
-
-            }
-
-
-
-            if (hadAssignedDirection) {
-
-                // A new attack has started. Clear the old direction BEFORE
-
-                // its own indicator event selects the next immutable value.
-
-                actor->SetGraphVariableInt(kAttackDirectionVariable, 0);
-
-            }
-
         } else if (eventName == "mco_winopen" || eventName == "mco_powerwinopen") {
 
-            // These windows may open BEFORE the hit/swing in some movesets.
-
-            // Only treat one as an ending boundary after weaponSwing. The
-
-            // direction remains consumed until the NEXT attackStart.
-
-            bool completedSwing = false;
-
-            {
-
-                std::scoped_lock lock(g_attackDirectionsMutex);
-
-                completedSwing = g_swingCompleted.contains(actor->GetFormID());
-
-            }
-
-            if (completedSwing) {
-
-                AttackPosition::GetSingleton()->ResetAttackDirection(actor);
-
-            }
+            AttackPosition::GetSingleton()->ResetAttackDirection(actor);
 
         } else if (eventName == "staggerstart" || eventName == "blockstart" || eventName == "attackstop" ||
 
                    eventName == "sbf_staggerstart") {
 
-            // Interruption/end can clear the active warning, but not unlock
-
-            // the attack. Another direction requires the next attackStart.
+            // Existing end/interruption events release direction and lock.
 
             AttackPosition::GetSingleton()->ResetAttackDirection(actor);
 
@@ -882,16 +786,6 @@ RE::BSEventNotifyControl AttackPosition::NpcCombatTracker::ProcessEvent(const RE
     const auto newState = *a_event->newState;
 
     if (newState == RE::ACTOR_COMBAT_STATE::kCombat) {
-
-        {
-
-            std::scoped_lock lock(g_attackDirectionsMutex);
-
-            const auto id = actor->GetFormID();
-
-            if (g_awaitingNextAttackStart.erase(id) != 0) g_indicatorDirectionLocked.erase(id);
-
-        }
 
         AttackPosition::GetSingleton()->RegisterSink(actor);
 
@@ -1153,9 +1047,7 @@ void AttackPosition::OnGameLoaded() {
 
         g_indicatorDirectionLocked.clear();
 
-        g_swingCompleted.clear();
 
-        g_awaitingNextAttackStart.clear();
 
     }
 

@@ -6,6 +6,8 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <string_view>
+#include <unordered_set>
 #include <vector>
 
 #include "Settings.h"
@@ -26,7 +28,6 @@ namespace
     // Committed player graph direction: 0 neutral, 1 top, 2 right, 3 left.
     int currentDirection = 0;
     bool currentAllBlock = false;
-    bool currentBlocking = false;
     bool currentUnblockable = false;
     bool currentParrySuccess = false;
     bool runtimeEligible = false;
@@ -36,7 +37,10 @@ namespace
     float runtimeYPercent = 50.0f;
     float runtimeResolutionScale = 1.0f;
     std::vector<AttackWarningVisual> attackWarnings;
+    // Skyrim menu notifications are needed because paused menus can stop actor updates.
+    std::unordered_set<std::string> openMenus;
     void SyncVisibility();
+    void RegisterMenuVisibilitySink();
     bool IsViewValid() { return prismaUI && view && prismaUI->IsValid(view); }
     void WriteColor(rapidjson::Writer<rapidjson::StringBuffer>& writer, const std::array<float, 4>& color)
     {
@@ -58,6 +62,10 @@ namespace
         writer.Bool(ui.enabled);
         writer.Key("editMode");
         writer.Bool(ui.editMode);
+        writer.Key("showOnlyWhileBlocking");
+        writer.Bool(ui.showOnlyWhileBlocking);
+        writer.Key("requireTDMTargetLock");
+        writer.Bool(ui.requireTDMTargetLock);
         writer.Key("showCenter");
         writer.Bool(ui.showCenter);
         writer.Key("moveCenterWithDirection");
@@ -186,7 +194,7 @@ namespace
             return;
         }
         static std::string payload;
-        payload = std::to_string(currentDirection) + "|" + (currentAllBlock ? "1" : "0") + "|" + (currentUnblockable ? "1" : "0") + "|" + (currentParrySuccess ? "1" : "0") + "|" + (currentBlocking ? "1" : "0");
+        payload = std::to_string(currentDirection) + "|" + (currentAllBlock ? "1" : "0") + "|" + (currentUnblockable ? "1" : "0") + "|" + (currentParrySuccess ? "1" : "0");
         prismaUI->InteropCall(view, "updateForHonorCombatDirection", payload.c_str());
     }
 
@@ -282,7 +290,15 @@ namespace
 
     void SyncVisibility()
     {
-        const bool shouldShow = Settings::PlayerUI.enabled || (Settings::NPCUI.enabled && !attackWarnings.empty());
+        auto* ui = RE::UI::GetSingleton();
+        const bool skyrimMenuOpen = ui &&
+            (ui->GameIsPaused() || ui->IsApplicationMenuOpen() ||
+             ui->IsItemMenuOpen() || ui->IsModalMenuOpen() ||
+             ui->IsMenuOpen(RE::DialogueMenu::MENU_NAME));
+        const bool frameworkMenuOpen = SKSEMenuFramework::IsInstalled() &&
+            SKSEMenuFramework::IsAnyBlockingWindowOpened();
+        const bool shouldShow = !skyrimMenuOpen && !frameworkMenuOpen &&
+            (Settings::PlayerUI.enabled || (Settings::NPCUI.enabled && !attackWarnings.empty()));
         const bool viewValid = IsViewValid();
         const bool hidden = viewValid ? prismaUI->IsHidden(view) : true;
         if (!shouldShow)
@@ -302,6 +318,37 @@ namespace
             prismaUI->Show(view);
         }
     }
+
+    class HudMenuVisibilitySink final : public RE::BSTEventSink<RE::MenuOpenCloseEvent>
+    {
+    public:
+        RE::BSEventNotifyControl ProcessEvent(const RE::MenuOpenCloseEvent* event,
+                                              RE::BSTEventSource<RE::MenuOpenCloseEvent>*) override
+        {
+            if (!event) return RE::BSEventNotifyControl::kContinue;
+            const char* name = event->menuName.c_str();
+            if (!name || std::string_view(name) == RE::HUDMenu::MENU_NAME)
+                return RE::BSEventNotifyControl::kContinue;
+
+            if (event->opening) openMenus.insert(name);
+            else openMenus.erase(name);
+            SyncVisibility();
+            return RE::BSEventNotifyControl::kContinue;
+        }
+    };
+
+    HudMenuVisibilitySink hudMenuVisibilitySink;
+    bool menuVisibilitySinkRegistered = false;
+
+    void RegisterMenuVisibilitySink()
+    {
+        if (menuVisibilitySinkRegistered) return;
+        if (auto* ui = RE::UI::GetSingleton())
+        {
+            ui->AddEventSink(&hudMenuVisibilitySink);
+            menuVisibilitySinkRegistered = true;
+        }
+    }
 }
 
 void Prisma::Install()
@@ -319,6 +366,7 @@ void Prisma::Install()
 
 void Prisma::Preload()
 {
+    RegisterMenuVisibilitySink();
     if (!EnsureView())
     {
         return;
@@ -330,10 +378,7 @@ void Prisma::Preload()
 
 void Prisma::Show()
 {
-    if (EnsureView())
-    {
-        prismaUI->Show(view);
-    }
+    SyncVisibility();
 }
 
 void Prisma::Hide()
@@ -352,7 +397,7 @@ void Prisma::ApplyUISettings()
     {
         return;
     }
-    if (Settings::PlayerUI.enabled && (runtimeEligible || currentUnblockable || (Settings::PlayerUI.editMode && runtimePreviewEligible)))
+    if (Settings::PlayerUI.enabled && (runtimeEligible || (Settings::PlayerUI.editMode && runtimePreviewEligible)))
     {
         EnsureView();
     }
@@ -368,30 +413,27 @@ void Prisma::ApplyUISettings()
 // ============================================================================
 void Prisma::UpdatePlayerHUD()
 {
+    RegisterMenuVisibilitySink();
     auto* player = RE::PlayerCharacter::GetSingleton();
     std::int32_t direction = 0;
     std::int32_t allBlock = 0;
     std::int32_t unblockable = 0;
     std::int32_t parrySuccess = 0;
+    std::int32_t parryActive = 0;
+    std::int32_t parryWindow = 0;
     if (player) {
         player->GetGraphVariableInt("CameraMovementFHB", direction);
         player->GetGraphVariableInt("AllBlockFHB", allBlock);
         player->GetGraphVariableInt("UnblockableFHB", unblockable);
         player->GetGraphVariableInt("ParrySuccessFHB", parrySuccess);
+        player->GetGraphVariableInt("ParryActiveFHB", parryActive);
+        player->GetGraphVariableInt("ParryWindowFHB", parryWindow);
     }
     // Forward the existing gameplay states without changing their lifetimes.
     UpdateDirection(std::clamp(static_cast<int>(direction), 0, 3));
     UpdateAllBlock(allBlock == 1);
     UpdateUnblockable(unblockable == 1);
     UpdateParrySuccess(parrySuccess == 1);
-
-    // Visual-only block state for the player's shield outer-edge highlight.
-    // Do not alter animation variables or combat mechanics.
-    const bool blocking = player && player->IsBlocking();
-    if (currentBlocking != blocking) {
-        currentBlocking = blocking;
-        SendDirection();
-    }
     // ========================================================================
     // PLAYER HUD - VISIBILITY / SCREEN POSITION
     // Preserve the old UI's first-person center and third-person torso anchor.
@@ -408,8 +450,24 @@ void Prisma::UpdatePlayerHUD()
     const bool playerReady = player && std::isfinite(health) && health > 0.0f;
     const bool gameActive = ui && !ui->GameIsPaused() &&
                             !ui->IsMenuOpen(RE::DialogueMenu::MENU_NAME);
+    // Both optional restrictions are independent; together they require both conditions.
+    bool graphBlocking = false;
+    bool graphBashing = false;
+    bool targetLocked = false;
+    if (player) {
+        player->GetGraphVariableBool("IsBlocking", graphBlocking);
+        player->GetGraphVariableBool("IsBashing", graphBashing);
+        player->GetGraphVariableBool("TDM_TargetLock", targetLocked);
+    }
+    const bool inGuardState = player &&
+        (player->IsBlocking() || graphBlocking || graphBashing ||
+         (actorState && actorState->GetAttackState() == RE::ATTACK_STATE_ENUM::kBash) ||
+         allBlock == 1 || parryActive == 1 || parryWindow == 1 ||
+         parrySuccess == 1 || unblockable == 1);
+    const bool blockEligible = !Settings::PlayerUI.showOnlyWhileBlocking || inGuardState;
+    const bool targetLockEligible = !Settings::PlayerUI.requireTDMTargetLock || targetLocked;
     const bool eligible = Settings::PlayerUI.enabled && playerReady && gameActive &&
-                          actorState && actorState->IsWeaponDrawn();
+                          actorState && actorState->IsWeaponDrawn() && blockEligible && targetLockEligible;
     if (!playerReady || !gameActive) {
         UpdateRuntimeState(false, false, 50.0f, 50.0f, resolutionScale, false);
         return;
@@ -542,7 +600,6 @@ void Prisma::Reset()
 {
     currentDirection = 0;
     currentAllBlock = false;
-    currentBlocking = false;
     currentUnblockable = false;
     currentParrySuccess = false;
     runtimeEligible = false;
@@ -589,6 +646,8 @@ void Prisma::RenderPlayerSettings() {
     ui::Separator();
     changed |= ui::Checkbox("Enable Player HUD", &s.enabled);
     changed |= ui::Checkbox("Preview While Editing", &s.editMode);
+    changed |= ui::Checkbox("Show Only While Blocking / Parrying / Unblockable", &s.showOnlyWhileBlocking);
+    changed |= ui::Checkbox("Show Only While Target Locked (TDM)", &s.requireTDMTargetLock);
     changed |= ui::Checkbox("Scale With Resolution", &s.scaleWithResolution);
     changed |= ui::Checkbox("Use Center-Screen Position In Third Person", &s.centerInThirdPerson);
     ui::Separator();

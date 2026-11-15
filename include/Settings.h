@@ -34,6 +34,8 @@ namespace Settings {
     struct PlayerUISettings {
         bool enabled = true;
         bool editMode = false;
+        bool showOnlyWhileBlocking = false;
+        bool requireTDMTargetLock = false;
         bool showCenter = true;
         bool moveCenterWithDirection = false;
         bool centerInThirdPerson = false;

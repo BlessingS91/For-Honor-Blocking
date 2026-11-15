@@ -33,6 +33,17 @@
     100% { transform: scale(1); filter: brightness(1); }
 }
 
+.direction-shield.unblockable {
+    animation: unblockable-expand 400ms ease-out;
+}
+
+@keyframes unblockable-expand {
+    0% { transform: scale(1); filter: brightness(0) invert(1); }
+    20% { transform: scale(1.25); filter: brightness(0) invert(1); }
+    60% { transform: scale(1.1); filter: brightness(1.5); }
+    100% { transform: scale(1); filter: brightness(1); }
+}
+
 .direction-image {
     opacity: 0.48;
     transition: opacity 80ms linear;
@@ -99,9 +110,15 @@
     transition: scale 100ms ease-out, filter 60ms ease-out;
 }
 
-.player-hud.parry-success svg {
-    scale: 1.1;
-    filter: brightness(0) invert(1);
+.player-hud.parry-success .direction-shield {
+    animation: parry-success-expand 400ms ease-out;
+}
+
+@keyframes parry-success-expand {
+    0% { transform: scale(1); filter: brightness(0) invert(1); }
+    20% { transform: scale(1.25); filter: brightness(0) invert(1); }
+    60% { transform: scale(1.1); filter: brightness(1.5); }
+    100% { transform: scale(1); filter: brightness(1); }
 }
 
 .player-hud .shield-guard .shield-segment,
@@ -109,13 +126,3 @@
     vector-effect: non-scaling-stroke;
 }
 
-/* Parry-success pulse retained from the supplied original HUD stylesheet. */
-.player-hud.parry-flash svg {
-    animation: parry-success-flash 350ms ease-out;
-    transform-origin: center;
-}
-@keyframes parry-success-flash {
-    0% { filter: brightness(1); }
-    35% { filter: brightness(0) invert(1); }
-    100% { filter: brightness(1); }
-}

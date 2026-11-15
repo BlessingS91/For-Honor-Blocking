@@ -532,7 +532,7 @@ function Shield(props: ShieldProps) {
             const active = () => props.allActive || props.unblockable || props.directionIndex === index;
             return (
               <g
-                classList={{ "direction-shield": true, active: active() }}
+                classList={{ "direction-shield": true, active: active(), unblockable: props.unblockable }}
                 style={{ opacity: `${(active() ? props.activeOpacityPercent : props.shieldOpacityPercent) / 100}` }}
               >
                 <path
@@ -659,7 +659,7 @@ function App() {
       parryFlashTimer = setTimeout(() => {
         setParryFlash(false);
         parryFlashTimer = undefined;
-      }, 150);
+      }, 400);
     }
     lastParrySuccess = success;
   };
@@ -793,7 +793,7 @@ function App() {
         class="honor-hud player-hud"
         classList={{
           "hud-visible": config().enabled &&
-            (runtime().eligible || unblockable() || (config().editMode && runtime().previewEligible)),
+            (runtime().eligible || (config().editMode && runtime().previewEligible)),
           "parry-success": parryFlash(),
         }}
         style={{
