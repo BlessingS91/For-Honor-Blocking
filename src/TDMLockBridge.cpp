@@ -1,13 +1,19 @@
 #include "TDMLockBridge.h"
 #include "TDM_API.h"
+#include "Settings.h"
+
+#include <RE/Skyrim.h>
 
 #include <atomic>
+#include <cstdint>
 #include <Windows.h>
 
 namespace {
     TDM_API::IVTDM5* g_tdm = nullptr;
     std::atomic_bool g_blockHeld{false};
     std::atomic_bool g_unlockRequested{false};
+    constexpr std::uint64_t kUnlockDelayMs = 250;
+    std::atomic<std::uint64_t> g_unlockDueMs{0};
     bool g_ownsDisable = false;
     bool g_warnedWrongThread = false;
 
@@ -42,19 +48,32 @@ namespace TDMLockBridge {
     {
         g_blockHeld.store(true, std::memory_order_release);
         g_unlockRequested.store(false, std::memory_order_release);
+        g_unlockDueMs.store(0, std::memory_order_release);
         // TDM handles the key-down itself. Its public API cannot initiate a lock.
     }
 
     void OnBlockReleased()
     {
+        // An attack cancel requires Block to be released and pressed again.
+        // Delay only that release while a power attack is actually underway.
+        // The second press cancels the pending unlock in OnBlockPressed().
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        const bool powerAttackRelease = player && player->IsPowerAttacking();
+        g_unlockDueMs.store(powerAttackRelease ? GetTickCount64() + kUnlockDelayMs : 0,
+                            std::memory_order_release);
         g_blockHeld.store(false, std::memory_order_release);
         g_unlockRequested.store(true, std::memory_order_release);
-        // Request the actual disable from Update(), on TDM's owning thread.
+        // Normal releases unlock at the next TDM Update; power attacks wait 250 ms.
     }
 
     void Update()
     {
         if (!g_tdm) return;
+        // Disabling auto-unlock cancels pending requests; release any disable we own.
+        if (!Settings::PlayerUI.unlockTDMOnBlockRelease) {
+            g_unlockRequested.store(false, std::memory_order_release);
+            g_unlockDueMs.store(0, std::memory_order_release);
+        }
         if (!g_ownsDisable && !g_unlockRequested.load(std::memory_order_acquire)) return;
 
         if (GetCurrentThreadId() != g_tdm->GetTDMThreadId()) {
@@ -62,6 +81,11 @@ namespace TDMLockBridge {
                 SKSE::log::warn("[FHB TDM] Player Update is not running on TDM thread; target-lock API request postponed");
                 g_warnedWrongThread = true;
             }
+            return;
+        }
+
+        if (!Settings::PlayerUI.unlockTDMOnBlockRelease) {
+            ReleaseOurDisable();
             return;
         }
 
@@ -76,11 +100,16 @@ namespace TDMLockBridge {
             return;
         }
 
+        // The deadline is zero for ordinary Block releases; only power attacks wait.
+        // Another Block press within the delay cancels the unlock in OnBlockPressed().
+        if (GetTickCount64() < g_unlockDueMs.load(std::memory_order_acquire)) return;
+
         if (!g_tdm->GetTargetLockState()) {
             // The forced disable has done its job; don't interfere with other mods
             // or prevent ordinary TDM use while the block key is not held.
             if (ReleaseOurDisable()) {
                 g_unlockRequested.store(false, std::memory_order_release);
+                g_unlockDueMs.store(0, std::memory_order_release);
             }
             return;
         }

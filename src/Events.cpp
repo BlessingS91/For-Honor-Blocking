@@ -126,7 +126,7 @@ namespace FHB {
         const auto& tag = a_event->tag;
 
         // Freeze the player direction only during committed attack animations.
-        // Input continues tracking; only CameraMovementFHB graph writes are frozen.
+        // Input continues tracking; only BlockDirectionFHB graph writes are frozen.
         if (actor->IsPlayerRef()) {
             if (tag == "preHitFrame") {
                 AttackDirectionLock::Lock();

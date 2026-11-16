@@ -1,6 +1,6 @@
 #pragma once
 
-// Player attack animation guard for the existing CameraMovementFHB writer.
+// Player attack animation guard for the existing blockDirectionFHB writer.
 namespace AttackDirectionLock {
     void Lock();
     void Unlock();

@@ -36,6 +36,7 @@ namespace Settings {
         bool editMode = false;
         bool showOnlyWhileBlocking = false;
         bool requireTDMTargetLock = false;
+        bool unlockTDMOnBlockRelease = true;  // For Honor Targeting Mode.
         bool showCenter = true;
         bool moveCenterWithDirection = false;
         bool centerInThirdPerson = false;
@@ -91,9 +92,9 @@ namespace Settings {
         std::array<std::string, 3> segmentImages{};
         std::string centerImage;
     };
+
     extern PlayerUISettings PlayerUI;
     extern NPCUISettings NPCUI;
-
     void Load();
     void Save();
     void ResetToDefaults();

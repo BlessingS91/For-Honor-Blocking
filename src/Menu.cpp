@@ -1,4 +1,3 @@
-
 #include "Menu.h"
 
 #include <SKSE/SKSE.h>
@@ -10,54 +9,85 @@
 #include "InputTracking.h"
 #include "Prisma.h"
 
-// The existing binding modules provide their own settings renderers.
-// Only their UI entry points are used here; gameplay input stays in each module.
+// Each module owns its input settings and INI persistence.
+// Menu.cpp only composes the sections and one shared Save action.
 namespace BlockKey {
-    void RenderInputSettings();
+    void RenderBlockingSettings();
+    void RenderAttackCancelBindings();
+    bool HasUnsavedInputChanges();
+    bool HasInputBindingConflict();
+    bool SaveInputBindings();
+    void DiscardInputBindings();
 }
 namespace PowerAttackKey {
     void RenderInputSettings();
+    bool HasUnsavedInputChanges();
+    bool SaveInputBindings();
+    void DiscardInputBindings();
 }
 
 namespace {
     namespace ui = ImGuiMCP;
 
-    // ============================================================================
-    // MENU TAB NAMES
-    // Page registration is centralized here; controls remain in their modules.
-    // ============================================================================
     constexpr auto kSection = "For Honor Combat";
     constexpr auto kBlockingPage = "Blocking Settings";
-    constexpr auto kInputsPage = "Inputs";
+    constexpr auto kInputsPage = "Input Bindings";
     constexpr auto kInputTrackingPage = "Input Tracking";
     constexpr auto kAttackSpeedPage = "Attack Speed";
     constexpr auto kAttackCancelPage = "Attack Cancel";
     constexpr auto kPlayerHudPage = "Player HUD";
     constexpr auto kNpcHudPage = "NPC HUD";
 
-    // ============================================================================
-    // SHARED INPUT BINDINGS TAB
-    // Combines existing Block Key and Power Attack Key UI; no input logic here.
-    // ============================================================================
     void RenderInputs() {
-        ui::Text("Block Bindings");
-        ui::Separator();
-        BlockKey::RenderInputSettings();
+        static bool lastSaveFailed = false;
+
+        ui::Text("BLOCKING");
+        ui::TextWrapped("Hold to guard. Match TDM's lock-on key to Block for targeting.");
+        BlockKey::RenderBlockingSettings();
 
         ui::Separator();
-        ui::Text("Power Attack Bindings");
-        ui::Separator();
+        ui::Text("POWER ATTACK");
+        ui::TextWrapped("Separate right, left and dual attacks. KB modifiers are optional.");
         PowerAttackKey::RenderInputSettings();
+
+        ui::Separator();
+        ui::Text("ATTACK CANCEL");
+        ui::TextWrapped("Feint a power attack within its cancel window, without pressing Block.");
+        BlockKey::RenderAttackCancelBindings();
+
+        ui::Separator();
+        const bool blockChanges = BlockKey::HasUnsavedInputChanges();
+        const bool powerChanges = PowerAttackKey::HasUnsavedInputChanges();
+        const bool conflict = BlockKey::HasInputBindingConflict();
+        if (conflict) {
+            ui::TextWrapped("Block and Attack Cancel cannot share a key on the same device.");
+        } else if (blockChanges || powerChanges) {
+            ui::Text("Unsaved changes");
+        }
+        if (lastSaveFailed) {
+            ui::TextWrapped("Some bindings could not be saved. Check the SKSE log.");
+        }
+
+        if (ui::Button("Save Input Bindings")) {
+            if (conflict) {
+                lastSaveFailed = false;  // The conflict explanation is already visible above.
+            } else {
+                const bool blockSaved = !blockChanges || BlockKey::SaveInputBindings();
+                const bool powerSaved = !powerChanges || PowerAttackKey::SaveInputBindings();
+                lastSaveFailed = !(blockSaved && powerSaved);
+            }
+        }
+        ui::SameLine();
+        if (ui::Button("Discard Changes")) {
+            BlockKey::DiscardInputBindings();
+            PowerAttackKey::DiscardInputBindings();
+            lastSaveFailed = false;
+        }
     }
 }
 
 namespace Menu {
-    // ============================================================================
-    // REGISTER FHB MENU TABS
-    // Each feature owns its settings UI; Menu.cpp only registers pages.
-    // ============================================================================
     void Install() {
-        // Install gameplay hook even when Menu Framework is unavailable.
         FHBAttackSpeed::Install();
 
         if (!SKSEMenuFramework::IsInstalled()) {
@@ -66,7 +96,6 @@ namespace Menu {
         }
 
         SKSEMenuFramework::SetSection(kSection);
-
         SKSEMenuFramework::AddSectionItem(kBlockingPage, Blocking::RenderSettings);
         SKSEMenuFramework::AddSectionItem(kInputsPage, RenderInputs);
         SKSEMenuFramework::AddSectionItem(kInputTrackingPage, InputTrackingTuning::RenderSettings);
@@ -75,8 +104,6 @@ namespace Menu {
         SKSEMenuFramework::AddSectionItem(kPlayerHudPage, Prisma::RenderPlayerSettings);
         SKSEMenuFramework::AddSectionItem(kNpcHudPage, Prisma::RenderNPCSettings);
 
-        SKSE::log::info(
-            "[menu] registered {} with blocking, inputs, attack speed, attack cancel, and player/NPC HUD tabs",
-            kSection);
+        SKSE::log::info("[menu] registered {} with shared Input Bindings save action", kSection);
     }
 }

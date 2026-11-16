@@ -1,6 +1,7 @@
 #include "Blocking.h"
 
 #include <SKSEMenuFramework.h>
+
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
@@ -14,8 +15,8 @@
 #include "Parry.h"
 #include "PoiseAPI.h"
 #include "Settings.h"
-#include "logger.h"
 #include "Unblockables.h"
+#include "logger.h"
 
 namespace Blocking {
     const char* GraphDirectionName(std::int32_t value) {
@@ -118,11 +119,8 @@ namespace Blocking {
             if (aggressor->IsPlayerRef() && Unblockables::IsUnblockable(aggressor)) {
                 Unblockables::OnPrecisionPreHit(aggressor, defender);
                 // Unblockables force a reaction but deal no direct weapon HP damage.
-                result.modifiers.push_back({
-                    PRECISION_API::PreHitModifier::ModifierType::Damage,
-                    PRECISION_API::PreHitModifier::ModifierOperation::Multiplicative,
-                    0.0f
-                });
+                result.modifiers.push_back({PRECISION_API::PreHitModifier::ModifierType::Damage,
+                                            PRECISION_API::PreHitModifier::ModifierOperation::Multiplicative, 0.0f});
                 NotifyHonorCombatReset(aggressor);
                 return result;
             }
@@ -166,8 +164,8 @@ namespace Blocking {
             const bool gotAttackDirection = aggressor->GetGraphVariableInt("AttackDirectionFHB", attackDirection);
             const bool npcDefender = !defender->IsPlayerRef();
             const bool gotBlockDirection = npcDefender
-                ? ((blockDirection = NPCDirectionalBlock::GetDirection(defender)) != 0)
-                : defender->GetGraphVariableInt("CameraMovementFHB", blockDirection);
+                                               ? ((blockDirection = NPCDirectionalBlock::GetDirection(defender)) != 0)
+                                               : defender->GetGraphVariableInt("BlockDirectionFHB", blockDirection);
             if (!gotAttackDirection || (!gotBlockDirection && allBlock != 1)) {
                 if (Settings::debugLogging) {
                     logger::info(
@@ -182,9 +180,10 @@ namespace Blocking {
                 "BlockDirection={}",
                 defender->GetName(), defender->IsBlocking(), gotAttackDirection, attackDirection, gotBlockDirection,
                 blockDirection);
-            const bool successful = npcDefender
-                ? NPCDirectionalBlock::IsSuccessfulBlock(attackDirection, defender, allBlock == 1)
-                : DirectionalHandler::IsSuccessfulBlock(attackDirection, blockDirection, allBlock == 1, false);
+            const bool successful =
+                npcDefender
+                    ? NPCDirectionalBlock::IsSuccessfulBlock(attackDirection, defender, allBlock == 1)
+                    : DirectionalHandler::IsSuccessfulBlock(attackDirection, blockDirection, allBlock == 1, false);
             const bool powerAttack = aggressor->IsPowerAttacking();
             const auto* actorValueOwner = defender->AsActorValueOwner();
             const float blockSkillLevel =
@@ -269,15 +268,14 @@ namespace Blocking {
         std::int32_t blockDirection = 0;
         const bool gotAttackDirection = attacker->GetGraphVariableInt("AttackDirectionFHB", attackDirection);
         const bool npcDefender = !target->IsPlayerRef();
-        const bool gotBlockDirection = npcDefender
-            ? ((blockDirection = NPCDirectionalBlock::GetDirection(target)) != 0)
-            : target->GetGraphVariableInt("CameraMovementFHB", blockDirection);
+        const bool gotBlockDirection = npcDefender ? ((blockDirection = NPCDirectionalBlock::GetDirection(target)) != 0)
+                                                   : target->GetGraphVariableInt("BlockDirectionFHB", blockDirection);
         if (!gotAttackDirection || (!gotBlockDirection && allBlock != 1)) {
             return damage;
         }
-        const bool successful = npcDefender
-            ? NPCDirectionalBlock::IsSuccessfulBlock(attackDirection, target, allBlock == 1)
-            : DirectionalHandler::IsSuccessfulBlock(attackDirection, blockDirection, allBlock == 1, false);
+        const bool successful =
+            npcDefender ? NPCDirectionalBlock::IsSuccessfulBlock(attackDirection, target, allBlock == 1)
+                        : DirectionalHandler::IsSuccessfulBlock(attackDirection, blockDirection, allBlock == 1, false);
         if (!successful) {
             return damage;
         }
@@ -333,14 +331,12 @@ namespace Blocking {
         ui::Text("Top requires BOTH: above the player's head and within the center band.");
         ui::Text("Higher head offset = harder Top; wider center band = easier Top.");
         float topHeadHeightOffset = AttackTrackingMode::topHeadHeightOffset.load(std::memory_order_relaxed);
-        if (ui::SliderFloat("Top - Head Height Offset (game units)",
-                            &topHeadHeightOffset, -100.0f, 100.0f, "%.1f")) {
+        if (ui::SliderFloat("Top - Head Height Offset (game units)", &topHeadHeightOffset, -100.0f, 100.0f, "%.1f")) {
             AttackTrackingMode::topHeadHeightOffset.store(topHeadHeightOffset, std::memory_order_relaxed);
             Settings::Save();
         }
         float topCenterHalfWidth = AttackTrackingMode::topCenterHalfWidth.load(std::memory_order_relaxed);
-        if (ui::SliderFloat("Top - Center Half-Width (game units)",
-                            &topCenterHalfWidth, 0.0f, 100.0f, "%.1f")) {
+        if (ui::SliderFloat("Top - Center Half-Width (game units)", &topCenterHalfWidth, 0.0f, 100.0f, "%.1f")) {
             AttackTrackingMode::topCenterHalfWidth.store(topCenterHalfWidth, std::memory_order_relaxed);
             Settings::Save();
         }
@@ -400,13 +396,13 @@ namespace Blocking {
         ui::Separator();
         ui::Text("Block Stamina Consumption");
         ui::Text("Controls stamina consumed when blocking an incoming attack.");
-#define STAMINA_SLIDER(label, setting)                            \
-    do {                                                          \
-        const float previous = Settings::setting;                 \
+#define STAMINA_SLIDER(label, setting)                                    \
+    do {                                                                  \
+        const float previous = Settings::setting;                         \
         ui::SliderFloat(label, &Settings::setting, 0.0f, 100.0f, "%.1f"); \
-        if (Settings::setting != previous) {                      \
-            Settings::Save();                                     \
-        }                                                         \
+        if (Settings::setting != previous) {                              \
+            Settings::Save();                                             \
+        }                                                                 \
     } while (false)
         STAMINA_SLIDER("One-Handed Sword", staminaOneHandSword);
         STAMINA_SLIDER("Dagger", staminaDagger);

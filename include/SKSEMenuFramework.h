@@ -2,6 +2,7 @@
 
 #include <windows.h>
 
+#include <cstdint>
 #include <codecvt>
 #include <locale>
 #include <string>
@@ -33,6 +34,12 @@ namespace ImGuiMCP {
 }
 
 namespace SKSEMenuFramework {
+    enum SectionFlags : uint32_t {
+        SectionFlags_None = 0,
+        SectionFlags_Hidden = 1 << 0,
+        SectionFlags_Disabled = 1 << 1
+    };
+
     inline bool IsInstalled() {
         constexpr auto dllPath = "Data/SKSE/Plugins/SKSEMenuFramework.dll";
         return std::filesystem::exists(dllPath);
@@ -71,6 +78,10 @@ namespace SKSEMenuFramework {
         using AddWindowWithViewFunction = Model::WindowInterface* (*)(RenderFunction, const char*);
         using GetMainWindowFunction = Model::WindowInterface* (*)();
         using AddSectionItemFunction = void (*)(const char* path, RenderFunction rendererFunction);
+        using RenameSectionFunction = bool (*)(const char* path, const char* newName);
+        using DeleteSectionFunction = bool (*)(const char* path);
+        using SetSectionFlagsFunction = bool (*)(const char* path, uint32_t flags, uint32_t mask);
+        using GetSectionFlagsFunction = bool (*)(const char* path, uint32_t* out);
 
         using RegisterInputEventFuction = int64_t (*)(InputEventCallback callback);
         using UnregisterInputEventFuction = void (*)(uint64_t id);
@@ -82,6 +93,7 @@ namespace SKSEMenuFramework {
         using LoadTextureFuction = ImGuiMCP::ImTextureID (*)(const char* texturePath, ImGuiMCP::ImVec2* size);
         using DisposeTextureFuction = void (*)(const char* texturePath);
         using GetMenuFrameworkVersionFunction = float (*)();
+        using GetMenuFrameworkAPIVersionFunction = uint32_t (*)();
         using SetHotkeyEnabledFunction = void (*)(bool enabled);
         using IsHotkeyEnabledFunction = bool (*)();
 
@@ -141,11 +153,39 @@ namespace SKSEMenuFramework {
         };
     }
 
+    // Menu paths use unescaped '/' characters as separators. Prefix a literal slash with a backslash.
     inline void AddSectionItem(std::string menu, Model::RenderFunction rendererFunction) {
         static auto func = Model::Internal::GetFunction<Model::AddSectionItemFunction>("AddSectionItem");
         if (func) {
             return func((Model::Internal::key + "/" + menu).c_str(), rendererFunction);
         }
+    }
+
+    inline void FullPathAddSectionItem(std::string path, Model::RenderFunction rendererFunction) {
+        static auto func = Model::Internal::GetFunction<Model::AddSectionItemFunction>("AddSectionItem");
+        if (func) {
+            return func(path.c_str(), rendererFunction);
+        }
+    }
+
+    inline bool RenameSection(std::string path, std::string newName) {
+        static auto func = Model::Internal::GetFunction<Model::RenameSectionFunction>("RenameSection");
+        return func ? func(path.c_str(), newName.c_str()) : false;
+    }
+
+    inline bool DeleteSection(std::string path) {
+        static auto func = Model::Internal::GetFunction<Model::DeleteSectionFunction>("DeleteSection");
+        return func ? func(path.c_str()) : false;
+    }
+
+    inline bool SetSectionFlags(std::string path, uint32_t flags, uint32_t mask = ~0u) {
+        static auto func = Model::Internal::GetFunction<Model::SetSectionFlagsFunction>("SetSectionFlags");
+        return func ? func(path.c_str(), flags, mask) : false;
+    }
+
+    inline bool GetSectionFlags(std::string path, uint32_t* out) {
+        static auto func = Model::Internal::GetFunction<Model::GetSectionFlagsFunction>("GetSectionFlags");
+        return func ? func(path.c_str(), out) : false;
     }
 
     inline Model::WindowInterface* AddWindow(Model::RenderFunction rendererFunction, bool doesWindowPauseGame = true) {
@@ -201,6 +241,12 @@ namespace SKSEMenuFramework {
         }
 
         return 0.0;
+    }
+
+    inline uint32_t GetMenuFrameworkAPIVersion() {
+        static auto func = Model::Internal::GetFunction<Model::GetMenuFrameworkAPIVersionFunction>(
+            "GetMenuFrameworkAPIVersion");
+        return func ? func() : 0;
     }
 
     inline bool IsAnyBlockingWindowOpened() {
@@ -11166,6 +11212,74 @@ namespace ImGuiMCP {
 }
 
 namespace ImGuiMCPComponents {
+    namespace Detail {
+        inline ImGuiMCP::ImGuiID activeKeyBindingPicker = 0;
+
+        inline void RenderComponentLabel(const char* label) {
+            std::string displayLabel = label;
+            const size_t hiddenLabelPosition = displayLabel.find("##");
+            if (hiddenLabelPosition != std::string::npos) {
+                ImGuiMCP::Text("%.*s", static_cast<int>(hiddenLabelPosition), displayLabel.c_str());
+            } else {
+                ImGuiMCP::TextUnformatted(label);
+            }
+        }
+
+        inline ImGuiMCP::ImGuiKey FindPressedKey() {
+            for (int keyValue = ImGuiMCP::ImGuiKey_NamedKey_BEGIN;
+                 keyValue < ImGuiMCP::ImGuiKey_NamedKey_END;
+                 ++keyValue) {
+                const auto key = static_cast<ImGuiMCP::ImGuiKey>(keyValue);
+                if (key != ImGuiMCP::ImGuiKey_Escape && ImGuiMCP::IsKeyPressed(key, false)) {
+                    return key;
+                }
+            }
+            return ImGuiMCP::ImGuiKey_None;
+        }
+    }
+
+    inline bool KeyBindingPicker(const char* label, ImGuiMCP::ImGuiKey* binding) {
+        if (!label || !binding) {
+            return false;
+        }
+
+        ImGuiMCP::PushID(label);
+        const auto pickerID = ImGuiMCP::GetID("##KeyBindingPicker");
+        const bool isCapturing = Detail::activeKeyBindingPicker == pickerID;
+        const char* bindingName = *binding == ImGuiMCP::ImGuiKey_None ? "Unbound" : ImGuiMCP::GetKeyName(*binding);
+        const char* buttonText = isCapturing ? "Press a key...###KeyBindingPicker" : bindingName;
+        const bool captureStarted = ImGuiMCP::Button(buttonText);
+
+        if (captureStarted) {
+            Detail::activeKeyBindingPicker = pickerID;
+        }
+
+        bool changed = false;
+        ImGuiMCP::SameLine();
+        if (ImGuiMCP::Button("Clear")) {
+            changed = *binding != ImGuiMCP::ImGuiKey_None;
+            *binding = ImGuiMCP::ImGuiKey_None;
+            Detail::activeKeyBindingPicker = 0;
+        }
+
+        ImGuiMCP::SameLine();
+        Detail::RenderComponentLabel(label);
+
+        if (Detail::activeKeyBindingPicker == pickerID && !captureStarted && !changed) {
+            ImGuiMCP::SetNextFrameWantCaptureKeyboard(true);
+            if (ImGuiMCP::IsKeyPressed(ImGuiMCP::ImGuiKey_Escape, false)) {
+                Detail::activeKeyBindingPicker = 0;
+            } else if (const auto pressedKey = Detail::FindPressedKey(); pressedKey != ImGuiMCP::ImGuiKey_None) {
+                changed = *binding != pressedKey;
+                *binding = pressedKey;
+                Detail::activeKeyBindingPicker = 0;
+            }
+        }
+
+        ImGuiMCP::PopID();
+        return changed;
+    }
+
     inline bool ToggleButton(const char* label, bool* v) {
         auto p = ImGuiMCP::GetCursorScreenPos();
         ImGuiMCP::ImDrawList* draw_list = ImGuiMCP::GetWindowDrawList();
@@ -11200,13 +11314,7 @@ namespace ImGuiMCPComponents {
 
         ImGuiMCP::SameLine();
 
-        std::string displayLabel = label;
-        size_t pos = displayLabel.find("##");
-        if (pos != std::string::npos) {
-            ImGuiMCP::Text("%.*s", (int)pos, displayLabel.c_str());
-        } else {
-            ImGuiMCP::Text("%s", label);
-        }
+        Detail::RenderComponentLabel(label);
 
         return clicked;
     }

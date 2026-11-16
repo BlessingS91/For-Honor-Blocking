@@ -24,15 +24,15 @@ namespace DirectionalHandler {
     // Returns the cached directional attack effects.
     const AttackEffects* GetAttackEffects();
 
-    // Converts CameraMovementFHB into the player's block direction.
-    Direction GetBlockDirection(int cameraMovementFHB);
+    // Converts BlockDirectionFHB into the player's block direction.
+    Direction GetBlockDirection(int BlockDirectionFHB);
 
     // Converts AttackDirectionFHB into the NPC's attack direction.
     Direction GetAttackDirection(int attackDirectionFHB);
 
     // Determines whether the player's block counters the NPC's attack.
-    bool IsSuccessfulBlock(int attackDirectionFHB, int cameraMovementFHB);
+    bool IsSuccessfulBlock(int attackDirectionFHB, int BlockDirectionFHB);
 
     // Supports all-block stance and unblockable attacks.
-    bool IsSuccessfulBlock(int attackDirectionFHB, int cameraMovementFHB, bool allBlock, bool unblockable);
+    bool IsSuccessfulBlock(int attackDirectionFHB, int BlockDirectionFHB, bool allBlock, bool unblockable);
 }

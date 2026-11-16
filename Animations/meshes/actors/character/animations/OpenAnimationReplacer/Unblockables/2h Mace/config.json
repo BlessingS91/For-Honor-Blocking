@@ -3,8 +3,16 @@
     "priority": 10022002,
     "conditions": [
         {
-            "condition": "IsBlocking",
-            "requiredVersion": "1.1.0.0"
+            "condition": "CompareValues",
+            "requiredVersion": "1.0.0.0",
+            "Value A": {
+                "graphVariable": "FHB_BlockPowerAttack",
+                "graphVariableType": "Int"
+            },
+            "Comparison": "==",
+            "Value B": {
+                "value": 1.0
+            }
         },
         {
             "condition": "IsEquippedType",

@@ -1,0 +1,28 @@
+{
+    "name": "Claymore ST Groggy",
+    "priority": 8990118,
+    "interruptible": true,
+    "replaceOnEcho": true,
+    "conditions": [
+        {
+            "condition": "CompareValues",
+            "requiredVersion": "1.0.0.0",
+            "Value A": {
+                "graphVariable": "GuardbrokenFHB",
+                "graphVariableType": "Int"
+            },
+            "Comparison": "==",
+            "Value B": {
+                "value": 1.0
+            }
+        },
+        {
+            "condition": "IsEquippedHasKeyword",
+            "requiredVersion": "1.0.0.0",
+            "Keyword": {
+                "editorID": "WeapTypeClaymore"
+            },
+            "Left hand": false
+        }
+    ]
+}

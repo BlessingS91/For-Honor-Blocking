@@ -1,0 +1,29 @@
+{
+    "name": "Stumble Knockdown",
+    "priority": 900000000,
+    "replaceOnEcho": true,
+    "conditions": [
+        {
+            "condition": "CompareValues",
+            "requiredVersion": "1.0.0.0",
+            "Value A": {
+                "graphVariable": "UnblockableReactionFHB",
+                "graphVariableType": "Int"
+            },
+            "Comparison": "==",
+            "Value B": {
+                "value": 2.0
+            }
+        },
+        {
+            "condition": "HasMagicEffect",
+            "requiredVersion": "1.0.0.0",
+            "negated": true,
+            "Magic effect": {
+                "pluginName": "For Honor Blocking.esp",
+                "formID": "81F"
+            },
+            "Active effects only": false
+        }
+    ]
+}

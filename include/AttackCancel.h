@@ -1,7 +1,6 @@
 #pragma once
 
-// Self-contained attack cancellation component.
-// Integration with plugin.cpp, Menu.cpp, and Settings.cpp is intentionally left for later.
+// Attack cancel gameplay. Bindings are configured separately in BlockKey.cpp.
 class AttackCancel final {
 public:
     struct Config {
@@ -11,16 +10,15 @@ public:
         float staminaCost{15.0f};  // 0 makes cancels free; otherwise 0–100.
     };
 
-    // One shared set of runtime options. The existing main INI can load/save
-    // these values when the module is integrated later. No separate INI.
+    // Existing gameplay settings are stored in ForHonorBlocking.ini.
+    // Separate keyboard/controller bindings are stored in SimpleBlock.ini.
     [[nodiscard]] static Config& GetConfig();
 
-    // These are NOT called automatically. Wire them up later.
-    static void Install();         // Install root-motion correction (BlockKey owns inputs).
-    static void OnBlockPressed();  // Called by BlockKey on a valid fresh block-key press.
-    static void Update();          // Call from the existing player update hook.
-    static void Reset();           // Clear transient attack state (not Config).
-    static void RenderSettings();  // Register as its own SKSE Menu Framework tab later.
+    static void Install();         // Existing plugin registration and root-motion hook.
+    static void OnCancelPressed(); // Called on a fresh configured cancel-key press.
+    static void Update();          // Existing player update hook.
+    static void Reset();           // Reset per-attack state, preserving Config.
+    static void RenderSettings();  // Existing Attack Cancel settings panel.
 
     AttackCancel() = delete;
 };

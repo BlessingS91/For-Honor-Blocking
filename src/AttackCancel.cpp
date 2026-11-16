@@ -97,11 +97,11 @@ namespace {
                controls && controls->IsFightingControlsEnabled();
     }
 
-    class BlockCancelInputSink final : public RE::BSTEventSink<RE::BSAnimationGraphEvent> {
+    class AttackCancelGraphSink final : public RE::BSTEventSink<RE::BSAnimationGraphEvent> {
     public:
-        static BlockCancelInputSink& GetSingleton()
+        static AttackCancelGraphSink& GetSingleton()
         {
-            static BlockCancelInputSink singleton;
+            static AttackCancelGraphSink singleton;
             return singleton;
         }
 
@@ -117,9 +117,9 @@ namespace {
             TrackAttack(*player);
         }
 
-        // Called by BlockKey.cpp only for a fresh press of the configured
-        // keyboard/mouse or controller block binding. No vanilla-input guesswork.
-        void OnBlockPressed(RE::PlayerCharacter* player)
+        // Called by BlockKey.cpp for a fresh press of the configured
+        // Attack Cancel binding. No connection to Block or TDM input.
+        void OnCancelPressed(RE::PlayerCharacter* player)
         {
             if (!AttackCancel::GetConfig().enabled || !CanProcessPlayer(player)) return;
             EnsureAnimationSink(player);
@@ -267,25 +267,25 @@ void AttackCancel::Install()
     static bool installed = false;
     if (installed) return;
 
-    // Cancel inputs are forwarded by BlockKey.cpp; do not register a separate
-    // input event sink that could respond to vanilla leftAttack bindings.
+    // Cancel inputs are forwarded by BlockKey.cpp on separate bindings;
+    // there is no competing vanilla-input listener.
     CancelMotionHook::Install();
     installed = true;
 }
 
-void AttackCancel::OnBlockPressed()
+void AttackCancel::OnCancelPressed()
 {
-    BlockCancelInputSink::GetSingleton().OnBlockPressed(RE::PlayerCharacter::GetSingleton());
+    AttackCancelGraphSink::GetSingleton().OnCancelPressed(RE::PlayerCharacter::GetSingleton());
 }
 
 void AttackCancel::Update()
 {
-    BlockCancelInputSink::GetSingleton().Update(RE::PlayerCharacter::GetSingleton());
+    AttackCancelGraphSink::GetSingleton().Update(RE::PlayerCharacter::GetSingleton());
 }
 
 void AttackCancel::Reset()
 {
-    BlockCancelInputSink::GetSingleton().Reset();
+    AttackCancelGraphSink::GetSingleton().Reset();
 }
 
 void AttackCancel::RenderSettings()
@@ -293,7 +293,7 @@ void AttackCancel::RenderSettings()
     namespace ui = ImGuiMCP;
     auto& config = GetConfig();
 
-    ui::Text("Attack Cancel - Block Key");
+    ui::Text("Attack Cancel");
     ui::Separator();
     bool changed = false;
     changed |= ui::Checkbox("Enable Attack Cancel", &config.enabled);
@@ -305,7 +305,7 @@ void AttackCancel::RenderSettings()
         ui::Text("Timed mode: 0 ms disables cancellation.");
     }
     changed |= ui::SliderFloat("Cancel Stamina Cost", &config.staminaCost, 0.0f, 100.0f, "%.1f");
-    ui::Text("Press Block during a power attack to cancel it.");
+    ui::Text("Press your assigned Attack Cancel key during a power attack.");
     ui::Text("0 stamina makes cancellation free in either mode.");
 
     if (ui::Button("Reset Attack Cancel Defaults")) {

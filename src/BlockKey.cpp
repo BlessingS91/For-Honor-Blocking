@@ -61,6 +61,10 @@ namespace {
 
         kBlockMod,
 
+        kAttackCancelKey,
+
+        kAttackCancelControllerKey,
+
     };
 
     constexpr const wchar_t* kPrimaryConfigFileName = L"SimpleBlock.ini";
@@ -89,10 +93,19 @@ namespace {
 
     bool g_hasUnsavedBlockModChange = false;
 
-    std::atomic<bool> g_pluginEnabled = true;
+    // Dedicated Attack Cancel bindings, independent of Block and TDM.
+    // Both are initially unbound; no modifier is required.
+    std::atomic<uint32_t> g_attackCancelKey{kKeyDisabled};
+    uint32_t g_pendingAttackCancelKey = kKeyDisabled;
+    bool g_hasUnsavedAttackCancelKeyChange = false;
 
+    std::atomic<uint32_t> g_attackCancelControllerKey{kKeyDisabled};
+    uint32_t g_pendingAttackCancelControllerKey = kKeyDisabled;
+    bool g_hasUnsavedAttackCancelControllerKeyChange = false;
+
+    // Master toggle for FHC's custom Block input handling (not Attack Cancel / Power Attack).
+    std::atomic<bool> g_pluginEnabled{true};
     bool g_pendingPluginEnabled = true;
-
     bool g_hasUnsavedEnabledChange = false;
 
     SKSEMenuFramework::Model::InputEvent* g_menuFrameworkInputHook = nullptr;
@@ -295,9 +308,31 @@ namespace {
 
     bool IsAnyBlockHeld() { return IsKeyboardBlockHeld() || g_controllerBlockDown; }
 
+    // Attack Cancel listens to its own key press; it never changes the guard
+    // state or forwards a press/release to TDM.
+    void HandleAttackCancelEvent(ButtonEvent* button, uint32_t keyCode) {
+        if (!button || !button->IsDown()) return;
+
+        const bool isController = button->device.get() == INPUT_DEVICE::kGamepad;
+        const uint32_t configuredKey = isController
+            ? g_attackCancelControllerKey.load(std::memory_order_relaxed)
+            : g_attackCancelKey.load(std::memory_order_relaxed);
+        if (configuredKey == kKeyDisabled || keyCode != configuredKey) return;
+        const uint32_t blockKey = isController
+            ? g_controllerBlockKey.load(std::memory_order_relaxed)
+            : g_altBlockKey.load(std::memory_order_relaxed);
+        if (configuredKey == blockKey || !IsGameplayInputAllowed()) return;
+
+        AttackCancel::OnCancelPressed();
+    }
+
     void HandleBlockEvent(ButtonEvent* button, uint32_t keyCode) {
 
         if (!button) return;
+
+        // A disabled custom Block binding must not drive guard or TDM on key-down.
+        // Still accept key-up so an already-held Block can release cleanly.
+        if (!g_pluginEnabled.load(std::memory_order_relaxed) && !button->IsUp()) return;
 
         const bool isController = button->device.get() == INPUT_DEVICE::kGamepad;
 
@@ -306,6 +341,12 @@ namespace {
                                                     : g_altBlockKey.load(std::memory_order_relaxed);
 
         if (configuredKey == kKeyDisabled || keyCode != configuredKey) return;
+
+        // Disabled means no new custom Block/TDM transitions. Existing held keys
+        // are still allowed to release, so guard cannot become stuck.
+        if (!g_pluginEnabled.load(std::memory_order_relaxed)) {
+            if (!button->IsUp() || !IsAnyBlockHeld()) return;
+        }
 
         const bool wasHeld = IsAnyBlockHeld();
 
@@ -377,7 +418,7 @@ namespace {
 
         }
 
-        if (!button->IsPressed() || !g_pluginEnabled.load(std::memory_order_relaxed)) return;
+        if (!button->IsPressed()) return;
 
         // The keyboard modifier applies only to the keyboard/mouse binding.
 
@@ -390,14 +431,6 @@ namespace {
         // block-to-attack transition.
 
         if (PowerAttackKey::IsBlockExitPending()) return;
-
-        // Cancel the current power attack only on the FIRST physical block
-        // press. This is the same configured binding (and modifier) that
-        // drives guarding; held/repeat events cannot retrigger cancellation.
-        // Run before changing iWantBlock or dispatching blockStart.
-        if (button->IsDown() && !wasHeld && stillHeld) {
-            AttackCancel::OnBlockPressed();
-        }
 
         if (actorState->GetAttackState() != ATTACK_STATE_ENUM::kNone) {
 
@@ -469,7 +502,9 @@ namespace {
 
                 if (isDown && macroKey < kMaxMacros && macroKey != kMouseLeftMacro) {
 
-                    const bool validDevice = capture == CaptureTarget::kBlockControllerKey ? isController : !isController;
+                    const bool controllerCapture = capture == CaptureTarget::kBlockControllerKey ||
+                                                   capture == CaptureTarget::kAttackCancelControllerKey;
+                    const bool validDevice = controllerCapture ? isController : !isController;
 
                     if (validDevice) {
 
@@ -506,6 +541,9 @@ namespace {
                 continue;
 
             }
+
+            // Independent cancel key. Existing Block/TDM handling is unchanged.
+            HandleAttackCancelEvent(button, macroKey);
 
             const bool suppressBlock = button->Value() != 0.0f && IsPowerAttackChordActive(macroKey);
 
@@ -551,25 +589,29 @@ namespace {
 
     }
 
-    bool SaveConfig(uint32_t blockKeyCode, uint32_t controllerBlockKey, uint32_t blockMod, bool pluginEnabled) {
+    bool SaveConfig(uint32_t blockKeyCode, uint32_t controllerBlockKey, uint32_t blockMod,
+                    uint32_t cancelKeyCode, uint32_t cancelControllerKey, bool blockInputsEnabled) {
 
         blockKeyCode = SanitizeKeyboardMouseKey(blockKeyCode);
 
         controllerBlockKey = SanitizeControllerKey(controllerBlockKey);
 
         blockMod = SanitizeUnifiedModifier(blockMod);
+        cancelKeyCode = SanitizeKeyboardMouseKey(cancelKeyCode);
+        cancelControllerKey = SanitizeControllerKey(cancelControllerKey);
 
         const std::filesystem::path savePath = GetConfigPath(kPrimaryConfigFileName);
 
         g_ini.Reset();
 
-        g_ini.SetBoolValue("General", "bEnabled", pluginEnabled);
-
+        g_ini.SetBoolValue("General", "bEnabled", blockInputsEnabled);
         g_ini.SetLongValue("General", "iBlockKeycode", static_cast<long>(blockKeyCode));
 
         g_ini.SetLongValue("General", "iBlockControllerKeycode", static_cast<long>(controllerBlockKey));
 
         g_ini.SetLongValue("General", "iBlockMod", static_cast<long>(blockMod));
+        g_ini.SetLongValue("General", "iAttackCancelKeycode", static_cast<long>(cancelKeyCode));
+        g_ini.SetLongValue("General", "iAttackCancelControllerKeycode", static_cast<long>(cancelControllerKey));
 
         try {
 
@@ -597,9 +639,10 @@ namespace {
 
         }
 
-        SKSE::log::info("Saved config enabled={} keyboardBlock={} controllerBlock={} mod={} to '{}'",
-
-                        pluginEnabled, blockKeyCode, controllerBlockKey, blockMod, savePath.string());
+        SKSE::log::info("Saved config keyboardBlock={} controllerBlock={} mod={} "
+                        "keyboardCancel={} controllerCancel={} to '{}'",
+                        blockKeyCode, controllerBlockKey, blockMod,
+                        cancelKeyCode, cancelControllerKey, savePath.string());
 
         return true;
 
@@ -815,6 +858,18 @@ namespace {
 
                         BindingType::kModifier};
 
+            case CaptureTarget::kAttackCancelKey:
+
+                return {&g_pendingAttackCancelKey, &g_attackCancelKey, &g_hasUnsavedAttackCancelKeyChange,
+
+                        BindingType::kKeyboardMouse};
+
+            case CaptureTarget::kAttackCancelControllerKey:
+
+                return {&g_pendingAttackCancelControllerKey, &g_attackCancelControllerKey,
+
+                        &g_hasUnsavedAttackCancelControllerKeyChange, BindingType::kController};
+
             default:
 
                 return {nullptr, nullptr, nullptr, BindingType::kKeyboardMouse};
@@ -927,140 +982,104 @@ namespace {
 
     }
 
-    void __stdcall RenderMenuFrameworkSection() {
-
+    // The combined Input Bindings page owns the section descriptions and Save row.
+    void RenderBlockingBindings() {
         PollCaptureResult();
-
-        ImGuiMCP::Text("Simple Block");
-
-        ImGuiMCP::Separator();
-
-        ImGuiMCP::TextWrapped(
-
-            "Keyboard/mouse and controller each have an active block binding. "
-
-            "The modifier applies only to keyboard/mouse. Press Esc to cancel a capture.");
-
-        ImGuiMCP::Separator();
-
-        ImGuiMCP::Text("Block");
+        bool enabled = g_pendingPluginEnabled;
+        if (ImGuiMCP::Checkbox("Enable Blocking Inputs", &enabled)) {
+            g_pendingPluginEnabled = enabled;
+            g_hasUnsavedEnabledChange = (enabled != g_pluginEnabled.load());
+        }
+        ImGuiMCP::SameLine();
+        ImGuiMCP::Text(enabled ? "ON" : "OFF");
 
         ImGuiMCP::Text("Keyboard / Mouse");
-
         ImGuiMCP::SameLine(170.0f);
-
         DrawBindButton("block_key", CaptureTarget::kBlockKey);
-
-        ImGuiMCP::Text("Modifier");
-
+        ImGuiMCP::Text("KB Modifier");
         ImGuiMCP::SameLine(170.0f);
-
         DrawBindButton("block_mod", CaptureTarget::kBlockMod);
-
         ImGuiMCP::Text("Controller");
-
         ImGuiMCP::SameLine(170.0f);
-
         DrawBindButton("block_controller_key", CaptureTarget::kBlockControllerKey);
+    }
 
+    void DrawAttackCancelBindings() {
+        ImGuiMCP::Text("Keyboard / Mouse");
+        ImGuiMCP::SameLine(170.0f);
+        DrawBindButton("attack_cancel_key", CaptureTarget::kAttackCancelKey);
+        ImGuiMCP::Text("Controller");
+        ImGuiMCP::SameLine(170.0f);
+        DrawBindButton("attack_cancel_controller_key", CaptureTarget::kAttackCancelControllerKey);
+    }
+
+    bool HasPendingInputChanges() {
+        return g_hasUnsavedBlockKeyChange || g_hasUnsavedControllerBlockKeyChange ||
+               g_hasUnsavedBlockModChange || g_hasUnsavedEnabledChange ||
+               g_hasUnsavedAttackCancelKeyChange || g_hasUnsavedAttackCancelControllerKeyChange;
+    }
+
+    bool HasPendingBindingConflict() {
+        return (g_pendingAttackCancelKey != kKeyDisabled &&
+                g_pendingAttackCancelKey == g_pendingAltBlockKey) ||
+               (g_pendingAttackCancelControllerKey != kKeyDisabled &&
+                g_pendingAttackCancelControllerKey == g_pendingControllerBlockKey);
+    }
+
+    bool CommitPendingInputChanges() {
+        if (HasPendingBindingConflict()) return false;
+        if (!HasPendingInputChanges()) return true;
+
+        const uint32_t blockKey = SanitizeKeyboardMouseKey(g_pendingAltBlockKey);
+        const uint32_t blockPad = SanitizeControllerKey(g_pendingControllerBlockKey);
+        const uint32_t blockMod = SanitizeUnifiedModifier(g_pendingBlockModifier);
+        const uint32_t cancelKey = SanitizeKeyboardMouseKey(g_pendingAttackCancelKey);
+        const uint32_t cancelPad = SanitizeControllerKey(g_pendingAttackCancelControllerKey);
+        if (!SaveConfig(blockKey, blockPad, blockMod, cancelKey, cancelPad, g_pendingPluginEnabled)) {
+            return false;
+        }
+
+        g_altBlockKey = blockKey;
+        g_pendingAltBlockKey = blockKey;
+        g_hasUnsavedBlockKeyChange = false;
+        g_controllerBlockKey = blockPad;
+        g_pendingControllerBlockKey = blockPad;
+        g_hasUnsavedControllerBlockKeyChange = false;
+        g_blockModifier = blockMod;
+        g_pendingBlockModifier = blockMod;
+        g_hasUnsavedBlockModChange = false;
+        g_attackCancelKey = cancelKey;
+        g_pendingAttackCancelKey = cancelKey;
+        g_hasUnsavedAttackCancelKeyChange = false;
+        g_attackCancelControllerKey = cancelPad;
+        g_pendingAttackCancelControllerKey = cancelPad;
+        g_hasUnsavedAttackCancelControllerKeyChange = false;
+        g_pluginEnabled = g_pendingPluginEnabled;
+        g_hasUnsavedEnabledChange = false;
+        return true;
+    }
+
+    void DiscardPendingInputChanges() {
+        CancelCapture();
+        g_pendingAltBlockKey = g_altBlockKey.load();
+        g_pendingControllerBlockKey = g_controllerBlockKey.load();
+        g_pendingBlockModifier = g_blockModifier.load();
+        g_pendingAttackCancelKey = g_attackCancelKey.load();
+        g_pendingAttackCancelControllerKey = g_attackCancelControllerKey.load();
+        g_pendingPluginEnabled = g_pluginEnabled.load();
+        g_hasUnsavedBlockKeyChange = false;
+        g_hasUnsavedControllerBlockKeyChange = false;
+        g_hasUnsavedBlockModChange = false;
+        g_hasUnsavedAttackCancelKeyChange = false;
+        g_hasUnsavedAttackCancelControllerKeyChange = false;
+        g_hasUnsavedEnabledChange = false;
+    }
+
+    // Legacy combined renderer retained for external call sites, without its own Save button.
+    void __stdcall RenderMenuFrameworkSection() {
+        RenderBlockingBindings();
         ImGuiMCP::Separator();
-
-        bool disableChecked = !g_pendingPluginEnabled;
-
-        if (ImGuiMCP::Checkbox("Disable Block Inputs", &disableChecked)) {
-
-            g_pendingPluginEnabled = !disableChecked;
-
-            g_hasUnsavedEnabledChange = (g_pendingPluginEnabled != g_pluginEnabled.load());
-
-        }
-
-        const bool hasUnsaved = g_hasUnsavedBlockKeyChange || g_hasUnsavedControllerBlockKeyChange ||
-
-                                g_hasUnsavedBlockModChange || g_hasUnsavedEnabledChange;
-
-        ImGuiMCP::Separator();
-
-        if (hasUnsaved) {
-
-            ImGuiMCP::TextWrapped("You have unsaved changes.");
-
-        }
-
-        if (ImGuiMCP::Button("Save Block Bindings")) {
-
-            const uint32_t saveBlockCode = SanitizeKeyboardMouseKey(g_pendingAltBlockKey);
-
-            const uint32_t saveControllerCode = SanitizeControllerKey(g_pendingControllerBlockKey);
-
-            const uint32_t saveBlockMod = SanitizeUnifiedModifier(g_pendingBlockModifier);
-
-            const bool saveEnabled = g_pendingPluginEnabled;
-
-            if (SaveConfig(saveBlockCode, saveControllerCode, saveBlockMod, saveEnabled)) {
-
-                g_altBlockKey = saveBlockCode;
-
-                g_pendingAltBlockKey = saveBlockCode;
-
-                g_hasUnsavedBlockKeyChange = false;
-
-                g_controllerBlockKey = saveControllerCode;
-
-                g_pendingControllerBlockKey = saveControllerCode;
-
-                g_hasUnsavedControllerBlockKeyChange = false;
-
-                g_blockModifier = saveBlockMod;
-
-                g_pendingBlockModifier = saveBlockMod;
-
-                g_hasUnsavedBlockModChange = false;
-
-                g_pluginEnabled = saveEnabled;
-
-                g_pendingPluginEnabled = saveEnabled;
-
-                g_hasUnsavedEnabledChange = false;
-
-            }
-
-        }
-
-        ImGuiMCP::SameLine();
-
-        if (ImGuiMCP::Button("Discard Block Changes")) {
-
-            CancelCapture();
-
-            g_pendingAltBlockKey = g_altBlockKey.load();
-
-            g_hasUnsavedBlockKeyChange = false;
-
-            g_pendingControllerBlockKey = g_controllerBlockKey.load();
-
-            g_hasUnsavedControllerBlockKeyChange = false;
-
-            g_pendingBlockModifier = g_blockModifier.load();
-
-            g_hasUnsavedBlockModChange = false;
-
-            g_pendingPluginEnabled = g_pluginEnabled.load();
-
-            g_hasUnsavedEnabledChange = false;
-
-        }
-
-        ImGuiMCP::SameLine();
-
-        if (ImGuiMCP::Button("Reload Block Bindings")) {
-
-            CancelCapture();
-
-            LoadConfig();
-
-        }
-
+        DrawAttackCancelBindings();
     }
 
     void LoadConfig() {
@@ -1104,10 +1123,15 @@ namespace {
             g_hasUnsavedBlockModChange = false;
 
             g_pluginEnabled = true;
-
             g_pendingPluginEnabled = true;
-
             g_hasUnsavedEnabledChange = false;
+
+            g_attackCancelKey = kKeyDisabled;
+            g_pendingAttackCancelKey = kKeyDisabled;
+            g_hasUnsavedAttackCancelKeyChange = false;
+            g_attackCancelControllerKey = kKeyDisabled;
+            g_pendingAttackCancelControllerKey = kKeyDisabled;
+            g_hasUnsavedAttackCancelControllerKeyChange = false;
 
             g_ini.Reset();
 
@@ -1122,6 +1146,11 @@ namespace {
         // In older SimpleBlock.ini versions, a controller code could be stored
 
         // in iBlockKeycode. Migrate it only when the dedicated field is absent.
+
+        const bool enabled = g_ini.GetBoolValue("General", "bEnabled", true);
+        g_pluginEnabled = enabled;
+        g_pendingPluginEnabled = enabled;
+        g_hasUnsavedEnabledChange = false;
 
         const long rawBlockValue = g_ini.GetLongValue("General", "iBlockKeycode", 0);
 
@@ -1159,19 +1188,26 @@ namespace {
 
         g_hasUnsavedBlockModChange = false;
 
-        const bool parsedEnabled = g_ini.GetBoolValue("General", "bEnabled", true);
+        const long rawCancelKey = g_ini.GetLongValue("General", "iAttackCancelKeycode", 0);
+        const uint32_t cancelKey = SanitizeKeyboardMouseKey(
+            static_cast<uint32_t>(rawCancelKey < 0 ? 0 : rawCancelKey));
+        const long rawCancelController = g_ini.GetLongValue("General", "iAttackCancelControllerKeycode", 0);
+        const uint32_t cancelControllerKey = SanitizeControllerKey(
+            static_cast<uint32_t>(rawCancelController < 0 ? 0 : rawCancelController));
 
-        g_pluginEnabled = parsedEnabled;
-
-        g_pendingPluginEnabled = parsedEnabled;
-
-        g_hasUnsavedEnabledChange = false;
+        g_attackCancelKey = cancelKey;
+        g_pendingAttackCancelKey = cancelKey;
+        g_hasUnsavedAttackCancelKeyChange = false;
+        g_attackCancelControllerKey = cancelControllerKey;
+        g_pendingAttackCancelControllerKey = cancelControllerKey;
+        g_hasUnsavedAttackCancelControllerKeyChange = false;
 
         g_ini.Reset();
 
-        SKSE::log::info("[BLOCK KEY] Loaded enabled={} keyboard={} controller={} modifier={} from '{}'",
-
-                        parsedEnabled, parsedKeyboard, parsedController, parsedBlockMod, path.string());
+        SKSE::log::info("[BLOCK KEY] Loaded keyboard={} controller={} modifier={} "
+                        "cancelKeyboard={} cancelController={} from '{}'",
+                        parsedKeyboard, parsedController, parsedBlockMod,
+                        cancelKey, cancelControllerKey, path.string());
 
     }
 
@@ -1190,6 +1226,11 @@ namespace {
             // Stop listening for a keybind and drop any unsaved edits back to the saved values.
 
             CancelCapture();
+
+            if (g_hasUnsavedEnabledChange) {
+                g_pendingPluginEnabled = g_pluginEnabled.load();
+                g_hasUnsavedEnabledChange = false;
+            }
 
             if (g_hasUnsavedBlockKeyChange) {
 
@@ -1215,12 +1256,13 @@ namespace {
 
             }
 
-            if (g_hasUnsavedEnabledChange) {
-
-                g_pendingPluginEnabled = g_pluginEnabled.load();
-
-                g_hasUnsavedEnabledChange = false;
-
+            if (g_hasUnsavedAttackCancelKeyChange) {
+                g_pendingAttackCancelKey = g_attackCancelKey.load();
+                g_hasUnsavedAttackCancelKeyChange = false;
+            }
+            if (g_hasUnsavedAttackCancelControllerKeyChange) {
+                g_pendingAttackCancelControllerKey = g_attackCancelControllerKey.load();
+                g_hasUnsavedAttackCancelControllerKeyChange = false;
             }
 
         }
@@ -1233,11 +1275,17 @@ namespace {
 
 namespace BlockKey {
 
-    // Rendered by Menu::Install() inside For Honor Blocking > Inputs.
+    // Rendered by Menu::Install() inside For Honor Combat > Input Bindings.
 
     // Do not register a second SKSE Menu Framework section here.
 
     void RenderInputSettings() { RenderMenuFrameworkSection(); }
+    void RenderBlockingSettings() { RenderBlockingBindings(); }
+    void RenderAttackCancelBindings() { DrawAttackCancelBindings(); }
+    bool HasUnsavedInputChanges() { return HasPendingInputChanges(); }
+    bool HasInputBindingConflict() { return HasPendingBindingConflict(); }
+    bool SaveInputBindings() { return CommitPendingInputChanges(); }
+    void DiscardInputBindings() { DiscardPendingInputChanges(); }
 
     void OnDataLoaded() {
 
@@ -1263,9 +1311,10 @@ namespace BlockKey {
 
         }
 
-        SKSE::log::info("[BLOCK KEY] Initialized keyboardBlock={} controllerBlock={} modifier={}; SPA chord coordination direct",
-
-                        g_altBlockKey.load(), g_controllerBlockKey.load(), g_blockModifier.load());
+        SKSE::log::info("[BLOCK KEY] Initialized block keyboard={} controller={} modifier={} "
+                        "cancel keyboard={} controller={}; SPA chord coordination direct",
+                        g_altBlockKey.load(), g_controllerBlockKey.load(), g_blockModifier.load(),
+                        g_attackCancelKey.load(), g_attackCancelControllerKey.load());
 
     }
 

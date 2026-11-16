@@ -32,8 +32,8 @@ namespace DirectionalHandler {
 
     const AttackEffects* GetAttackEffects() { return &g_attackEffects; }
 
-    Direction GetBlockDirection(int cameraMovementFHB) {
-        switch (cameraMovementFHB) {
+    Direction GetBlockDirection(int BlockDirectionFHB) {
+        switch (BlockDirectionFHB) {
             case 1:
                 return Direction::Top;
             case 2:
@@ -60,11 +60,11 @@ namespace DirectionalHandler {
         }
     }
 
-    bool IsSuccessfulBlock(int attackDirectionFHB, int cameraMovementFHB) {
-        return IsSuccessfulBlock(attackDirectionFHB, cameraMovementFHB, false, false);
+    bool IsSuccessfulBlock(int attackDirectionFHB, int BlockDirectionFHB) {
+        return IsSuccessfulBlock(attackDirectionFHB, BlockDirectionFHB, false, false);
     }
 
-    bool IsSuccessfulBlock(int attackDirectionFHB, int cameraMovementFHB, bool allBlock, bool unblockable) {
+    bool IsSuccessfulBlock(int attackDirectionFHB, int BlockDirectionFHB, bool allBlock, bool unblockable) {
         // Unblockable attacks bypass all defensive directions.
         if (unblockable) {
             return false;
@@ -82,7 +82,7 @@ namespace DirectionalHandler {
             return true;
         }
 
-        const auto block = GetBlockDirection(cameraMovementFHB);
+        const auto block = GetBlockDirection(BlockDirectionFHB);
 
         if (block == Direction::None) {
             return false;

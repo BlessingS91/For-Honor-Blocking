@@ -17,12 +17,10 @@ namespace Parry {
         if (!aggressor || !defender) return result;
 
         // Existing unblockable state prevents parry reactions (players and creatures).
-        if (Unblockables::IsUnblockable(aggressor))
-            return result;
+        if (Unblockables::IsUnblockable(aggressor)) return result;
 
         std::int32_t counterParrySuccess = 0;
-        if (aggressor->IsPlayerRef() &&
-            aggressor->GetGraphVariableInt("ParrySuccessFHB", counterParrySuccess) &&
+        if (aggressor->IsPlayerRef() && aggressor->GetGraphVariableInt("ParrySuccessFHB", counterParrySuccess) &&
             counterParrySuccess == 1) {
             FHB::Events::ActivateParryKnockdown(defender);
         }
@@ -42,8 +40,7 @@ namespace Parry {
         }
 
         std::int32_t defenderParrySuccess = 0;
-        if (defender->IsPlayerRef() &&
-            defender->GetGraphVariableInt("ParrySuccessFHB", defenderParrySuccess) &&
+        if (defender->IsPlayerRef() && defender->GetGraphVariableInt("ParrySuccessFHB", defenderParrySuccess) &&
             defenderParrySuccess == 1 && !aggressor->IsPlayerRef()) {
             result.bIgnoreHit = true;
             Gameplay::ApplyLargeStagger(aggressor, defender);
@@ -51,32 +48,32 @@ namespace Parry {
         }
 
         std::int32_t parryWindow = 0;
-        if (!defender->GetGraphVariableInt("ParryWindowFHB", parryWindow) || parryWindow != 1)
-            return result;
+        if (!defender->GetGraphVariableInt("ParryWindowFHB", parryWindow) || parryWindow != 1) return result;
 
         std::int32_t attackDirection = 0;
         std::int32_t parryDirection = 0;
         const bool gotAttackDirection = aggressor->GetGraphVariableInt("AttackDirectionFHB", attackDirection);
-        const bool gotParryDirection = defender->GetGraphVariableInt("CameraMovementFHB", parryDirection);
+        const bool gotParryDirection = defender->GetGraphVariableInt("BlockDirectionFHB", parryDirection);
         if (!gotAttackDirection || !gotParryDirection) {
             if (Settings::debugLogging) {
-                logger::info("[PARRY] Direction read failed | AttackRead={} | ParryRead={}",
-                             gotAttackDirection, gotParryDirection);
+                logger::info("[PARRY] Direction read failed | AttackRead={} | ParryRead={}", gotAttackDirection,
+                             gotParryDirection);
             }
             return result;
         }
 
         const bool successful = DirectionalHandler::IsSuccessfulBlock(attackDirection, parryDirection);
         if (Settings::debugLogging) {
-            logger::info("[PARRY] Attacker={} | Defender={} | ParryWindow={} | AttackDirection={} | ParryDirection={} | Result={}",
-                         aggressor->GetName(), defender->GetName(), parryWindow, attackDirection,
-                         parryDirection, successful ? "SUCCESS" : "FAIL");
+            logger::info(
+                "[PARRY] Attacker={} | Defender={} | ParryWindow={} | AttackDirection={} | ParryDirection={} | "
+                "Result={}",
+                aggressor->GetName(), defender->GetName(), parryWindow, attackDirection, parryDirection,
+                successful ? "SUCCESS" : "FAIL");
         }
         if (!successful) return result;
 
         if (defender->SetGraphVariableInt("ParrySuccessFHB", 1)) {
-            if (Settings::debugLogging)
-                logger::info("[PARRY] ParrySuccessFHB = 1 | Actor={}", defender->GetName());
+            if (Settings::debugLogging) logger::info("[PARRY] ParrySuccessFHB = 1 | Actor={}", defender->GetName());
         } else {
             logger::warn("[PARRY] Failed to set ParrySuccessFHB | Actor={}", defender->GetName());
         }
@@ -85,14 +82,13 @@ namespace Parry {
         Gameplay::ApplyLargeStagger(aggressor, defender);
         Gameplay::SpawnBlockEffects(defender, false, true);
 
-        if (defender == RE::PlayerCharacter::GetSingleton() &&
-            aggressor != RE::PlayerCharacter::GetSingleton()) {
+        if (defender == RE::PlayerCharacter::GetSingleton() && aggressor != RE::PlayerCharacter::GetSingleton()) {
             auto* dataHandler = RE::TESDataHandler::GetSingleton();
             const auto* timeSlow = dataHandler->LookupForm<RE::SpellItem>(0x80C, "For Honor Blocking.esp");
             if (auto* caster = defender->GetMagicCaster(RE::MagicSystem::CastingSource::kInstant)) {
                 if (timeSlow) {
-                    caster->CastSpellImmediate(const_cast<RE::SpellItem*>(timeSlow), false, defender,
-                                               1.0f, false, 0.0f, defender);
+                    caster->CastSpellImmediate(const_cast<RE::SpellItem*>(timeSlow), false, defender, 1.0f, false, 0.0f,
+                                               defender);
                 } else {
                     logger::warn("[PARRY] Spell not found: TimeSlow_FHB");
                 }

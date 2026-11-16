@@ -132,7 +132,7 @@ PRECISION_API::WeaponCollisionCallbackReturn WeaponClash::OnWeaponCollision(
     std::int32_t playerDirection = 0;
     std::int32_t enemyDirection = 0;
 
-    const bool gotPlayerDirection = player->GetGraphVariableInt("CameraMovementFHB", playerDirection);
+    const bool gotPlayerDirection = player->GetGraphVariableInt("BlockDirectionFHB", playerDirection);
 
     const bool gotEnemyDirection = enemy->GetGraphVariableInt("AttackDirectionFHB", enemyDirection);
 

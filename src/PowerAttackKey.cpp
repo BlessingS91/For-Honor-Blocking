@@ -175,7 +175,7 @@ namespace {
         if (!player) return false;
 
         std::int32_t direction = 0;
-        return player->GetGraphVariableInt("CameraMovementFHB", direction) && direction == 0;
+        return player->GetGraphVariableInt("BlockDirectionFHB", direction) && direction == 0;
     }
 
     void ResetFromBlockAttack(PlayerCharacter* player, const char* /*reason*/) {
@@ -1207,164 +1207,151 @@ namespace {
         ImGuiMCP::SameLine(170.0f);
         DrawBindButton(idSuffix, target);
     }
-    // ============================================================================
-    // POWER ATTACK SETTINGS MENU - For Honor Blocking > Inputs
-    // All settings controls for this module are rendered here.
-    // ============================================================================
+    // Rendered under Input Bindings by Menu.cpp; no module-local Save controls.
     void __stdcall RenderMenuFrameworkSection() {
         PollCaptureResult();
-        ImGuiMCP::Text("FHB Power Attack - Dual Device Controls");
-        ImGuiMCP::Text("Controller binding build: 2026-11-09 V2");
-        ImGuiMCP::Separator();
-        ImGuiMCP::TextWrapped(
-            "Each attack can have both a Keyboard / Mouse and a Controller binding. "
-            "Modifiers apply to Keyboard / Mouse only; controller presses need no modifier. "
-            "Press Esc to cancel capture.");
-        ImGuiMCP::Separator();
-        ImGuiMCP::Text("Right Power Attack");
+        ImGuiMCP::Text("Right Hand");
         DrawBindRow("Keyboard / Mouse", "right_key", CaptureTarget::kRightKey);
         DrawBindRow("Controller", "right_gamepad_key", CaptureTarget::kRightGamepadKey);
         DrawBindRow("KB Modifier", "right_mod", CaptureTarget::kRightMod);
         ImGuiMCP::Separator();
-        ImGuiMCP::Text("Left Power Attack");
+        ImGuiMCP::Text("Left Hand");
         DrawBindRow("Keyboard / Mouse", "left_key", CaptureTarget::kLeftKey);
         DrawBindRow("Controller", "left_gamepad_key", CaptureTarget::kLeftGamepadKey);
         DrawBindRow("KB Modifier", "left_mod", CaptureTarget::kLeftMod);
         ImGuiMCP::Separator();
-        ImGuiMCP::Text("Dual Power Attack");
+        ImGuiMCP::Text("Dual Wield");
         DrawBindRow("Keyboard / Mouse", "dual_key", CaptureTarget::kDualKey);
         DrawBindRow("Controller", "dual_gamepad_key", CaptureTarget::kDualGamepadKey);
         DrawBindRow("KB Modifier", "dual_mod", CaptureTarget::kDualMod);
         ImGuiMCP::Separator();
-        bool chosenMco = g_pendingMcoMode;
-        if (ImGuiMCP::Checkbox("MCO Compatibility", &chosenMco)) {
-            g_pendingMcoMode = chosenMco;
-            g_hasUnsavedMcoChange = (g_pendingMcoMode != g_mcoMode.load());
+
+        bool mco = g_pendingMcoMode;
+        if (ImGuiMCP::Checkbox("MCO Compatibility", &mco)) {
+            g_pendingMcoMode = mco;
+            g_hasUnsavedMcoChange = (mco != g_mcoMode.load());
         }
-        bool chosenNoStamina = g_pendingNoStaminaPowerAttack;
-        if (ImGuiMCP::Checkbox("Disable Power Attack at 0 Stamina", &chosenNoStamina)) {
-            g_pendingNoStaminaPowerAttack = chosenNoStamina;
-            g_hasUnsavedNoStaminaChange = (g_pendingNoStaminaPowerAttack != g_noStaminaPowerAttack.load());
+        bool noStamina = g_pendingNoStaminaPowerAttack;
+        if (ImGuiMCP::Checkbox("Disable Power Attack at 0 Stamina", &noStamina)) {
+            g_pendingNoStaminaPowerAttack = noStamina;
+            g_hasUnsavedNoStaminaChange = (noStamina != g_noStaminaPowerAttack.load());
         }
-        ImGuiMCP::Text("Power Attack Stamina Requirement");
-        ImGuiMCP::TextWrapped(
-            "Minimum stamina needed to start any power attack, including out of block. "
-            "Set to 0 for no additional minimum. Does not change stamina consumption.");
-        if (ImGuiMCP::SliderFloat("Minimum Stamina Required", &g_pendingMinimumPowerAttackStamina, 0.0f,
-                                  kMaxMinimumPowerAttackStamina, "%.0f")) {
+        if (ImGuiMCP::SliderFloat("Minimum Stamina Required", &g_pendingMinimumPowerAttackStamina,
+                                  0.0f, kMaxMinimumPowerAttackStamina, "%.0f")) {
             g_hasUnsavedMinimumPowerAttackStaminaChange =
                 (g_pendingMinimumPowerAttackStamina != g_minimumPowerAttackStamina.load());
         }
-        ImGuiMCP::Separator();
-        bool disableChecked = !g_pendingPluginEnabled;
-        if (ImGuiMCP::Checkbox("Disable Power Attack Inputs", &disableChecked)) {
-            g_pendingPluginEnabled = !disableChecked;
-            g_hasUnsavedEnabledChange = (g_pendingPluginEnabled != g_pluginEnabled.load());
-        }
-        const bool hasUnsaved = g_hasUnsavedKeyChange || g_hasUnsavedLeftKeyChange || g_hasUnsavedDualKeyChange ||
-                                g_hasUnsavedRightGamepadKeyChange || g_hasUnsavedLeftGamepadKeyChange ||
-                                g_hasUnsavedDualGamepadKeyChange || g_hasUnsavedRightMod || g_hasUnsavedLeftMod ||
-                                g_hasUnsavedDualMod || g_hasUnsavedMcoChange || g_hasUnsavedNoStaminaChange ||
-                                g_hasUnsavedMinimumPowerAttackStaminaChange || g_hasUnsavedEnabledChange;
-        ImGuiMCP::Separator();
-        if (hasUnsaved) {
-            ImGuiMCP::TextWrapped("You have unsaved changes.");
-        }
-        if (ImGuiMCP::Button("Save Power Attack Bindings")) {
-            const uint32_t saveCode = SanitizeKeyboardMouseKey(g_pendingAltPowerAttackKey);
-            const uint32_t saveLeftCode = SanitizeKeyboardMouseKey(g_pendingAltLeftPowerAttackKey);
-            const uint32_t saveDualCode = SanitizeKeyboardMouseKey(g_pendingAltDualPowerAttackKey);
-            const uint32_t saveRightGamepad = SanitizeGamepadKey(g_pendingRightGamepadPowerAttackKey);
-            const uint32_t saveLeftGamepad = SanitizeGamepadKey(g_pendingLeftGamepadPowerAttackKey);
-            const uint32_t saveDualGamepad = SanitizeGamepadKey(g_pendingDualGamepadPowerAttackKey);
-            const uint32_t saveRMod = SanitizeUnifiedModifier(g_pendingRightModifier);
-            const uint32_t saveLMod = SanitizeUnifiedModifier(g_pendingLeftModifier);
-            const uint32_t saveDMod = SanitizeUnifiedModifier(g_pendingDualModifier);
-            const bool saveMco = g_pendingMcoMode;
-            const bool saveNoStamina = g_pendingNoStaminaPowerAttack;
-            const float saveMinStamina =
-                std::clamp(g_pendingMinimumPowerAttackStamina, 0.0f, kMaxMinimumPowerAttackStamina);
-            const bool saveEnabled = g_pendingPluginEnabled;
-            if (SaveConfig(saveCode, saveLeftCode, saveDualCode, saveRightGamepad, saveLeftGamepad, saveDualGamepad,
-                           saveRMod, saveLMod, saveDMod, saveMco, saveNoStamina, saveMinStamina, saveEnabled)) {
-                g_altPowerAttackKey = saveCode;
-                g_pendingAltPowerAttackKey = saveCode;
-                g_hasUnsavedKeyChange = false;
-                g_altLeftPowerAttackKey = saveLeftCode;
-                g_pendingAltLeftPowerAttackKey = saveLeftCode;
-                g_hasUnsavedLeftKeyChange = false;
-                g_altDualPowerAttackKey = saveDualCode;
-                g_pendingAltDualPowerAttackKey = saveDualCode;
-                g_hasUnsavedDualKeyChange = false;
-                g_rightGamepadPowerAttackKey = saveRightGamepad;
-                g_pendingRightGamepadPowerAttackKey = saveRightGamepad;
-                g_hasUnsavedRightGamepadKeyChange = false;
-                g_leftGamepadPowerAttackKey = saveLeftGamepad;
-                g_pendingLeftGamepadPowerAttackKey = saveLeftGamepad;
-                g_hasUnsavedLeftGamepadKeyChange = false;
-                g_dualGamepadPowerAttackKey = saveDualGamepad;
-                g_pendingDualGamepadPowerAttackKey = saveDualGamepad;
-                g_hasUnsavedDualGamepadKeyChange = false;
-                g_rightModifier = saveRMod;
-                g_pendingRightModifier = saveRMod;
-                g_hasUnsavedRightMod = false;
-                g_leftModifier = saveLMod;
-                g_pendingLeftModifier = saveLMod;
-                g_hasUnsavedLeftMod = false;
-                g_dualModifier = saveDMod;
-                g_pendingDualModifier = saveDMod;
-                g_hasUnsavedDualMod = false;
-                g_mcoMode = saveMco;
-                g_pendingMcoMode = saveMco;
-                g_hasUnsavedMcoChange = false;
-                g_noStaminaPowerAttack = saveNoStamina;
-                g_pendingNoStaminaPowerAttack = saveNoStamina;
-                g_hasUnsavedNoStaminaChange = false;
-                g_minimumPowerAttackStamina.store(saveMinStamina);
-                g_pendingMinimumPowerAttackStamina = saveMinStamina;
-                g_hasUnsavedMinimumPowerAttackStaminaChange = false;
-                g_pluginEnabled = saveEnabled;
-                g_pendingPluginEnabled = saveEnabled;
-                g_hasUnsavedEnabledChange = false;
-            }
+        ImGuiMCP::TextWrapped("Minimum stamina to start an attack; 0 removes this extra requirement.");
+
+        bool enabled = g_pendingPluginEnabled;
+        if (ImGuiMCP::Checkbox("Enable Power Attack Inputs", &enabled)) {
+            g_pendingPluginEnabled = enabled;
+            g_hasUnsavedEnabledChange = (enabled != g_pluginEnabled.load());
         }
         ImGuiMCP::SameLine();
-        if (ImGuiMCP::Button("Discard Power Attack Changes")) {
-            CancelCapture();
-            g_pendingAltPowerAttackKey = g_altPowerAttackKey.load();
-            g_hasUnsavedKeyChange = false;
-            g_pendingAltLeftPowerAttackKey = g_altLeftPowerAttackKey.load();
-            g_hasUnsavedLeftKeyChange = false;
-            g_pendingAltDualPowerAttackKey = g_altDualPowerAttackKey.load();
-            g_hasUnsavedDualKeyChange = false;
-            g_pendingRightGamepadPowerAttackKey = g_rightGamepadPowerAttackKey.load();
-            g_hasUnsavedRightGamepadKeyChange = false;
-            g_pendingLeftGamepadPowerAttackKey = g_leftGamepadPowerAttackKey.load();
-            g_hasUnsavedLeftGamepadKeyChange = false;
-            g_pendingDualGamepadPowerAttackKey = g_dualGamepadPowerAttackKey.load();
-            g_hasUnsavedDualGamepadKeyChange = false;
-            g_pendingRightModifier = g_rightModifier.load();
-            g_hasUnsavedRightMod = false;
-            g_pendingLeftModifier = g_leftModifier.load();
-            g_hasUnsavedLeftMod = false;
-            g_pendingDualModifier = g_dualModifier.load();
-            g_hasUnsavedDualMod = false;
-            g_pendingMcoMode = g_mcoMode.load();
-            g_hasUnsavedMcoChange = false;
-            g_pendingNoStaminaPowerAttack = g_noStaminaPowerAttack.load();
-            g_hasUnsavedNoStaminaChange = false;
-            g_pendingMinimumPowerAttackStamina = g_minimumPowerAttackStamina.load();
-            g_hasUnsavedMinimumPowerAttackStaminaChange = false;
-            g_pendingPluginEnabled = g_pluginEnabled.load();
-            g_hasUnsavedEnabledChange = false;
-        }
-        ImGuiMCP::SameLine();
-        if (ImGuiMCP::Button("Reload Power Attack Bindings")) {
-            CancelCapture();
-            LoadConfig();
-        }
+        ImGuiMCP::Text(enabled ? "ON" : "OFF");
     }
-    // ======================== END POWER ATTACK SETTINGS MENU =======================
+
+    bool HasPendingInputChanges() {
+        return g_hasUnsavedKeyChange || g_hasUnsavedLeftKeyChange || g_hasUnsavedDualKeyChange ||
+               g_hasUnsavedRightGamepadKeyChange || g_hasUnsavedLeftGamepadKeyChange ||
+               g_hasUnsavedDualGamepadKeyChange || g_hasUnsavedRightMod || g_hasUnsavedLeftMod ||
+               g_hasUnsavedDualMod || g_hasUnsavedMcoChange || g_hasUnsavedNoStaminaChange ||
+               g_hasUnsavedMinimumPowerAttackStaminaChange || g_hasUnsavedEnabledChange;
+    }
+
+    bool CommitPendingInputChanges() {
+        if (!HasPendingInputChanges()) return true;
+        const uint32_t rightKey = SanitizeKeyboardMouseKey(g_pendingAltPowerAttackKey);
+        const uint32_t leftKey = SanitizeKeyboardMouseKey(g_pendingAltLeftPowerAttackKey);
+        const uint32_t dualKey = SanitizeKeyboardMouseKey(g_pendingAltDualPowerAttackKey);
+        const uint32_t rightPad = SanitizeGamepadKey(g_pendingRightGamepadPowerAttackKey);
+        const uint32_t leftPad = SanitizeGamepadKey(g_pendingLeftGamepadPowerAttackKey);
+        const uint32_t dualPad = SanitizeGamepadKey(g_pendingDualGamepadPowerAttackKey);
+        const uint32_t rightMod = SanitizeUnifiedModifier(g_pendingRightModifier);
+        const uint32_t leftMod = SanitizeUnifiedModifier(g_pendingLeftModifier);
+        const uint32_t dualMod = SanitizeUnifiedModifier(g_pendingDualModifier);
+        const bool mco = g_pendingMcoMode;
+        const bool noStamina = g_pendingNoStaminaPowerAttack;
+        const bool enabled = g_pendingPluginEnabled;
+        const float minStamina =
+            std::clamp(g_pendingMinimumPowerAttackStamina, 0.0f, kMaxMinimumPowerAttackStamina);
+        if (!SaveConfig(rightKey, leftKey, dualKey, rightPad, leftPad, dualPad,
+                        rightMod, leftMod, dualMod, mco, noStamina, minStamina, enabled)) {
+            return false;
+        }
+        g_altPowerAttackKey = rightKey;
+        g_pendingAltPowerAttackKey = rightKey;
+        g_hasUnsavedKeyChange = false;
+        g_altLeftPowerAttackKey = leftKey;
+        g_pendingAltLeftPowerAttackKey = leftKey;
+        g_hasUnsavedLeftKeyChange = false;
+        g_altDualPowerAttackKey = dualKey;
+        g_pendingAltDualPowerAttackKey = dualKey;
+        g_hasUnsavedDualKeyChange = false;
+        g_rightGamepadPowerAttackKey = rightPad;
+        g_pendingRightGamepadPowerAttackKey = rightPad;
+        g_hasUnsavedRightGamepadKeyChange = false;
+        g_leftGamepadPowerAttackKey = leftPad;
+        g_pendingLeftGamepadPowerAttackKey = leftPad;
+        g_hasUnsavedLeftGamepadKeyChange = false;
+        g_dualGamepadPowerAttackKey = dualPad;
+        g_pendingDualGamepadPowerAttackKey = dualPad;
+        g_hasUnsavedDualGamepadKeyChange = false;
+        g_rightModifier = rightMod;
+        g_pendingRightModifier = rightMod;
+        g_hasUnsavedRightMod = false;
+        g_leftModifier = leftMod;
+        g_pendingLeftModifier = leftMod;
+        g_hasUnsavedLeftMod = false;
+        g_dualModifier = dualMod;
+        g_pendingDualModifier = dualMod;
+        g_hasUnsavedDualMod = false;
+        g_mcoMode = mco;
+        g_pendingMcoMode = mco;
+        g_hasUnsavedMcoChange = false;
+        g_noStaminaPowerAttack = noStamina;
+        g_pendingNoStaminaPowerAttack = noStamina;
+        g_hasUnsavedNoStaminaChange = false;
+        g_minimumPowerAttackStamina.store(minStamina);
+        g_pendingMinimumPowerAttackStamina = minStamina;
+        g_hasUnsavedMinimumPowerAttackStaminaChange = false;
+        g_pluginEnabled = enabled;
+        g_pendingPluginEnabled = enabled;
+        g_hasUnsavedEnabledChange = false;
+        return true;
+    }
+
+    void DiscardPendingInputChanges() {
+        CancelCapture();
+        g_pendingAltPowerAttackKey = g_altPowerAttackKey.load();
+        g_pendingAltLeftPowerAttackKey = g_altLeftPowerAttackKey.load();
+        g_pendingAltDualPowerAttackKey = g_altDualPowerAttackKey.load();
+        g_pendingRightGamepadPowerAttackKey = g_rightGamepadPowerAttackKey.load();
+        g_pendingLeftGamepadPowerAttackKey = g_leftGamepadPowerAttackKey.load();
+        g_pendingDualGamepadPowerAttackKey = g_dualGamepadPowerAttackKey.load();
+        g_pendingRightModifier = g_rightModifier.load();
+        g_pendingLeftModifier = g_leftModifier.load();
+        g_pendingDualModifier = g_dualModifier.load();
+        g_pendingMcoMode = g_mcoMode.load();
+        g_pendingNoStaminaPowerAttack = g_noStaminaPowerAttack.load();
+        g_pendingMinimumPowerAttackStamina = g_minimumPowerAttackStamina.load();
+        g_pendingPluginEnabled = g_pluginEnabled.load();
+        g_hasUnsavedKeyChange = false;
+        g_hasUnsavedLeftKeyChange = false;
+        g_hasUnsavedDualKeyChange = false;
+        g_hasUnsavedRightGamepadKeyChange = false;
+        g_hasUnsavedLeftGamepadKeyChange = false;
+        g_hasUnsavedDualGamepadKeyChange = false;
+        g_hasUnsavedRightMod = false;
+        g_hasUnsavedLeftMod = false;
+        g_hasUnsavedDualMod = false;
+        g_hasUnsavedMcoChange = false;
+        g_hasUnsavedNoStaminaChange = false;
+        g_hasUnsavedMinimumPowerAttackStaminaChange = false;
+        g_hasUnsavedEnabledChange = false;
+    }
+
     void LoadConfig() {
         const std::filesystem::path path = GetPrimaryConfigPath();
         const SI_Error result = g_ini.LoadFile(path.c_str());
@@ -1602,6 +1589,9 @@ namespace PowerAttackKey {
     // Rendered by Menu::Install() inside For Honor Blocking > Inputs.
     // Keep initialization/input callbacks in OnDataLoaded, not a second menu registration.
     void RenderInputSettings() { RenderMenuFrameworkSection(); }
+    bool HasUnsavedInputChanges() { return HasPendingInputChanges(); }
+    bool SaveInputBindings() { return CommitPendingInputChanges(); }
+    void DiscardInputBindings() { DiscardPendingInputChanges(); }
 
     void Initialize() { g_task = SKSE::GetTaskInterface(); }
 

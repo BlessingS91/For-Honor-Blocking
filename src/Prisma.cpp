@@ -1,36 +1,23 @@
 #include "Prisma.h"
 
+#include <SKSEMenuFramework.h>
 #include <Windows.h>
 
 #include <algorithm>
-
 #include <array>
-
 #include <cmath>
-
 #include <cstdio>
-
 #include <cstring>
-
 #include <string>
-
 #include <string_view>
-
 #include <unordered_set>
-
 #include <vector>
 
-#include "Settings.h"
 #include "NPCDirectionalBlock.h"
-
-#include "logger.h"
-
-#include <SKSEMenuFramework.h>
-
 #include "PrismaUI_API.h"
-
+#include "Settings.h"
+#include "logger.h"
 #include "rapidjson/stringbuffer.h"
-
 #include "rapidjson/writer.h"
 
 namespace
@@ -84,19 +71,15 @@ namespace
     void WriteColor(rapidjson::Writer<rapidjson::StringBuffer>& writer, const std::array<float, 4>& color)
 
     {
-
         writer.StartArray();
 
         for (const float component : color)
 
         {
-
             writer.Double(component);
-
         }
 
         writer.EndArray();
-
     }
 
     // Player attack color is independent of PlayerUI.activeColor (the blocking color).
@@ -106,11 +89,10 @@ namespace
     constexpr char kPlayerAttackColorKey[] = "AttackColor";
     constexpr std::array<float, 4> kDefaultPlayerAttackColor{0.95f, 0.72f, 0.22f, 1.0f};
 
-    std::array<float, 4> LoadPlayerAttackColor()
-    {
+    std::array<float, 4> LoadPlayerAttackColor() {
         char buffer[128]{};
-        GetPrivateProfileStringA(kPlayerColorIniSection, kPlayerAttackColorKey, "", buffer,
-                                 sizeof(buffer), kPlayerColorIniPath);
+        GetPrivateProfileStringA(kPlayerColorIniSection, kPlayerAttackColorKey, "", buffer, sizeof(buffer),
+                                 kPlayerColorIniPath);
 
         float rgba[4]{};
         if (std::sscanf(buffer, "%f,%f,%f,%f", &rgba[0], &rgba[1], &rgba[2], &rgba[3]) != 4) {
@@ -125,24 +107,19 @@ namespace
         return color;
     }
 
-    std::array<float, 4>& PlayerAttackColor()
-    {
+    std::array<float, 4>& PlayerAttackColor() {
         static auto color = LoadPlayerAttackColor();
         return color;
     }
 
-    void SavePlayerAttackColor()
-    {
+    void SavePlayerAttackColor() {
         const auto& color = PlayerAttackColor();
         char buffer[128]{};
-        std::snprintf(buffer, sizeof(buffer), "%.6f,%.6f,%.6f,%.6f",
-                      color[0], color[1], color[2], color[3]);
-        WritePrivateProfileStringA(kPlayerColorIniSection, kPlayerAttackColorKey,
-                                   buffer, kPlayerColorIniPath);
+        std::snprintf(buffer, sizeof(buffer), "%.6f,%.6f,%.6f,%.6f", color[0], color[1], color[2], color[3]);
+        WritePrivateProfileStringA(kPlayerColorIniSection, kPlayerAttackColorKey, buffer, kPlayerColorIniPath);
     }
 
-    void ResetPlayerAttackColor()
-    {
+    void ResetPlayerAttackColor() {
         PlayerAttackColor() = kDefaultPlayerAttackColor;
         SavePlayerAttackColor();
     }
@@ -150,7 +127,6 @@ namespace
     std::string BuildSettingsPayload()
 
     {
-
         const auto& ui = Settings::PlayerUI;
 
         rapidjson::StringBuffer buffer;
@@ -282,9 +258,7 @@ namespace
         for (std::size_t i = 0; i < ui.segmentImages.size(); ++i)
 
         {
-
             writer.String("");
-
         }
 
         writer.EndArray();
@@ -303,13 +277,17 @@ namespace
 
         writer.Bool(npc.enabled);
 
-        writer.Key("showCenter"); writer.Bool(npc.showCenter);
+        writer.Key("showCenter");
+        writer.Bool(npc.showCenter);
 
-        writer.Key("centerPieceSizePercent"); writer.Int(npc.centerPieceSizePercent);
+        writer.Key("centerPieceSizePercent");
+        writer.Int(npc.centerPieceSizePercent);
 
-        writer.Key("centerColor"); WriteColor(writer, npc.centerColor);
+        writer.Key("centerColor");
+        WriteColor(writer, npc.centerColor);
 
-        writer.Key("centerImage"); writer.String("");
+        writer.Key("centerImage");
+        writer.String("");
 
         writer.Key("alwaysShowInCombat");
 
@@ -386,9 +364,7 @@ namespace
         for (std::size_t i = 0; i < npc.segmentImages.size(); ++i)
 
         {
-
             writer.String("");
-
         }
 
         writer.EndArray();
@@ -398,19 +374,15 @@ namespace
         writer.EndObject();
 
         return buffer.GetString();
-
     }
 
     void SendSettings()
 
     {
-
         if (!domReady || !IsViewValid())
 
         {
-
             return;
-
         }
 
         static std::string payload;
@@ -418,59 +390,52 @@ namespace
         payload = BuildSettingsPayload();
 
         prismaUI->InteropCall(view, "updateForHonorCombatSettings", payload.c_str());
-
     }
 
     void SendDirection()
 
     {
-
         if (!domReady || !IsViewValid())
 
         {
-
             return;
-
         }
 
         static std::string payload;
 
-        payload = std::to_string(currentDirection) + "|" + (currentAllBlock ? "1" : "0") + "|" + (currentUnblockable ? "1" : "0") + "|" + (currentParrySuccess ? "1" : "0") + "|" + (currentBlocking ? "1" : "0") + "|" + std::to_string(currentAttackDirection) + "|" + (currentParrying ? "1" : "0");
+        payload = std::to_string(currentDirection) + "|" + (currentAllBlock ? "1" : "0") + "|" +
+                  (currentUnblockable ? "1" : "0") + "|" + (currentParrySuccess ? "1" : "0") + "|" +
+                  (currentBlocking ? "1" : "0") + "|" + std::to_string(currentAttackDirection) + "|" +
+                  (currentParrying ? "1" : "0");
 
         prismaUI->InteropCall(view, "updateForHonorCombatDirection", payload.c_str());
-
     }
 
     void SendRuntimeState()
 
     {
-
         if (!domReady || !IsViewValid())
 
         {
-
             return;
-
         }
 
         char payload[128]{};
 
-        std::snprintf(payload, sizeof(payload), "%d|%d|%.3f|%.3f|%.3f|%d", runtimeEligible ? 1 : 0, runtimePreviewEligible ? 1 : 0, runtimeXPercent, runtimeYPercent, runtimeResolutionScale, runtimeAttached ? 1 : 0);
+        std::snprintf(payload, sizeof(payload), "%d|%d|%.3f|%.3f|%.3f|%d", runtimeEligible ? 1 : 0,
+                      runtimePreviewEligible ? 1 : 0, runtimeXPercent, runtimeYPercent, runtimeResolutionScale,
+                      runtimeAttached ? 1 : 0);
 
         prismaUI->InteropCall(view, "updateForHonorCombatRuntime", payload);
-
     }
 
     void SendAttackWarnings()
 
     {
-
         if (!domReady || !IsViewValid())
 
         {
-
             return;
-
         }
 
         rapidjson::StringBuffer buffer;
@@ -482,7 +447,6 @@ namespace
         for (const auto& warning : attackWarnings)
 
         {
-
             writer.StartObject();
 
             writer.Key("id");
@@ -531,19 +495,16 @@ namespace
             writer.Bool(warning.parrySuccess);
 
             writer.EndObject();
-
         }
 
         writer.EndArray();
 
         prismaUI->InteropCall(view, "updateForHonorCombatAttackWarnings", buffer.GetString());
-
     }
 
     void SendAllState()
 
     {
-
         SendSettings();
 
         SendDirection();
@@ -551,27 +512,21 @@ namespace
         SendRuntimeState();
 
         SendAttackWarnings();
-
     }
 
     bool EnsureView()
 
     {
-
         if (!prismaUI)
 
         {
-
             return false;
-
         }
 
         if (IsViewValid())
 
         {
-
             return true;
-
         }
 
         view = 0;
@@ -593,13 +548,10 @@ namespace
                                     [](PrismaView readyView)
 
                                     {
-
                                         if (!prismaUI || !view || readyView != view)
 
                                         {
-
                                             return;
-
                                         }
 
                                         domReady = true;
@@ -607,46 +559,41 @@ namespace
                                         SendAllState();
 
                                         SyncVisibility();
-
                                     });
 
         if (!view)
 
         {
-
             logger::error("For Honor Combat could not create its PrismaUI view.");
 
             return false;
-
         }
 
         prismaUI->RegisterJSListener(view, "hideForHonorCombat", [](const char*) { Prisma::Hide(); });
 
         return true;
-
     }
 
     void SyncVisibility()
 
     {
-
         auto* ui = RE::UI::GetSingleton();
 
         const bool skyrimMenuOpen = ui &&
 
-            (ui->GameIsPaused() || ui->IsApplicationMenuOpen() ||
+                                    (ui->GameIsPaused() || ui->IsApplicationMenuOpen() ||
 
-             ui->IsItemMenuOpen() || ui->IsModalMenuOpen() ||
+                                     ui->IsItemMenuOpen() || ui->IsModalMenuOpen() ||
 
-             ui->IsMenuOpen(RE::DialogueMenu::MENU_NAME));
+                                     ui->IsMenuOpen(RE::DialogueMenu::MENU_NAME));
 
         const bool frameworkMenuOpen = SKSEMenuFramework::IsInstalled() &&
 
-            SKSEMenuFramework::IsAnyBlockingWindowOpened();
+                                       SKSEMenuFramework::IsAnyBlockingWindowOpened();
 
         const bool shouldShow = !skyrimMenuOpen && !frameworkMenuOpen &&
 
-            (Settings::PlayerUI.enabled || (Settings::NPCUI.enabled && !attackWarnings.empty()));
+                                (Settings::PlayerUI.enabled || (Settings::NPCUI.enabled && !attackWarnings.empty()));
 
         const bool viewValid = IsViewValid();
 
@@ -655,67 +602,53 @@ namespace
         if (!shouldShow)
 
         {
-
             if (viewValid && !hidden)
 
             {
-
                 prismaUI->Hide(view);
-
             }
 
             return;
-
         }
 
         if (!EnsureView() || !domReady)
 
         {
-
             return;
-
         }
 
         if (prismaUI->IsHidden(view))
 
         {
-
             prismaUI->Show(view);
-
         }
-
     }
 
     class HudMenuVisibilitySink final : public RE::BSTEventSink<RE::MenuOpenCloseEvent>
 
     {
-
     public:
-
         RE::BSEventNotifyControl ProcessEvent(const RE::MenuOpenCloseEvent* event,
 
                                               RE::BSTEventSource<RE::MenuOpenCloseEvent>*) override
 
         {
-
             if (!event) return RE::BSEventNotifyControl::kContinue;
 
             const char* name = event->menuName.c_str();
 
-            if (!name || std::string_view(name) == RE::HUDMenu::MENU_NAME)
+            if (!name || std::string_view(name) == RE::HUDMenu::MENU_NAME) return RE::BSEventNotifyControl::kContinue;
 
-                return RE::BSEventNotifyControl::kContinue;
+            if (event->opening)
+                openMenus.insert(name);
 
-            if (event->opening) openMenus.insert(name);
-
-            else openMenus.erase(name);
+            else
+                openMenus.erase(name);
 
             SyncVisibility();
 
             return RE::BSEventNotifyControl::kContinue;
-
         }
-
     };
 
     HudMenuVisibilitySink hudMenuVisibilitySink;
@@ -725,19 +658,15 @@ namespace
     void RegisterMenuVisibilitySink()
 
     {
-
         if (menuVisibilitySinkRegistered) return;
 
         if (auto* ui = RE::UI::GetSingleton())
 
         {
-
             ui->AddEventSink(&hudMenuVisibilitySink);
 
             menuVisibilitySinkRegistered = true;
-
         }
-
     }
 
 }
@@ -745,13 +674,11 @@ namespace
 void Prisma::Install()
 
 {
-
     prismaUI = reinterpret_cast<PRISMA_UI_API::IVPrismaUI1*>(PRISMA_UI_API::RequestPluginAPI());
 
     if (!prismaUI)
 
     {
-
         logger::error("PrismaUI.dll was not found; For Honor Combat HUD is unavailable.");
 
     }
@@ -759,25 +686,19 @@ void Prisma::Install()
     else
 
     {
-
         logger::info("For Honor Combat linked to PrismaUI!");
-
     }
-
 }
 
 void Prisma::Preload()
 
 {
-
     RegisterMenuVisibilitySink();
 
     if (!EnsureView())
 
     {
-
         return;
-
     }
 
     prismaUI->Hide(view);
@@ -785,29 +706,22 @@ void Prisma::Preload()
     SendAllState();
 
     SyncVisibility();
-
 }
 
 void Prisma::Show()
 
 {
-
     SyncVisibility();
-
 }
 
 void Prisma::Hide()
 
 {
-
     if (IsViewValid())
 
     {
-
         prismaUI->Hide(view);
-
     }
-
 }
 
 bool Prisma::IsHidden() { return !IsViewValid() || prismaUI->IsHidden(view); }
@@ -817,21 +731,16 @@ bool Prisma::IsReady() { return domReady && IsViewValid(); }
 void Prisma::ApplyUISettings()
 
 {
-
     if (!prismaUI)
 
     {
-
         return;
-
     }
 
     if (Settings::PlayerUI.enabled && (runtimeEligible || (Settings::PlayerUI.editMode && runtimePreviewEligible)))
 
     {
-
         EnsureView();
-
     }
 
     SendSettings();
@@ -839,14 +748,13 @@ void Prisma::ApplyUISettings()
     SendDirection();
 
     SyncVisibility();
-
 }
 
 // ============================================================================
 
 // PLAYER HUD - READ GAMEPLAY GRAPH STATE / UPDATE PRISMAUI
 
-// InputTracking owns CameraMovementFHB. FHB::Events owns the combat flags.
+// InputTracking owns BlockDirectionFHB. FHB::Events owns the combat flags.
 
 // This is visual-only: no animation events, graph writes, timers, or new hooks.
 
@@ -855,7 +763,6 @@ void Prisma::ApplyUISettings()
 void Prisma::UpdatePlayerHUD()
 
 {
-
     RegisterMenuVisibilitySink();
 
     auto* player = RE::PlayerCharacter::GetSingleton();
@@ -874,8 +781,7 @@ void Prisma::UpdatePlayerHUD()
     std::int32_t parryWindow = 0;
 
     if (player) {
-
-        player->GetGraphVariableInt("CameraMovementFHB", direction);
+        player->GetGraphVariableInt("BlockDirectionFHB", direction);
         player->GetGraphVariableInt("AttackDirectionFHB", attackDirection);
 
         player->GetGraphVariableInt("AllBlockFHB", allBlock);
@@ -887,7 +793,6 @@ void Prisma::UpdatePlayerHUD()
         player->GetGraphVariableInt("ParryActiveFHB", parryActive);
 
         player->GetGraphVariableInt("ParryWindowFHB", parryWindow);
-
     }
 
     // Forward the existing gameplay states without changing their lifetimes.
@@ -902,8 +807,8 @@ void Prisma::UpdatePlayerHUD()
         SendDirection();
     }
 
-    const int validAttackDirection = (attackDirection >= 1 && attackDirection <= 3)
-                                         ? static_cast<int>(attackDirection) : 0;
+    const int validAttackDirection =
+        (attackDirection >= 1 && attackDirection <= 3) ? static_cast<int>(attackDirection) : 0;
     if (currentAttackDirection != validAttackDirection) {
         currentAttackDirection = validAttackDirection;
         SendDirection();
@@ -928,9 +833,7 @@ void Prisma::UpdatePlayerHUD()
     const auto screen = RE::BSGraphics::Renderer::GetScreenSize();
 
     if (Settings::PlayerUI.scaleWithResolution && screen.height > 0) {
-
         resolutionScale = std::clamp(static_cast<float>(screen.height) / 1080.0f, 0.5f, 4.0f);
-
     }
 
     auto* ui = RE::UI::GetSingleton();
@@ -956,13 +859,11 @@ void Prisma::UpdatePlayerHUD()
     bool targetLocked = false;
 
     if (player) {
-
         player->GetGraphVariableBool("IsBlocking", graphBlocking);
 
         player->GetGraphVariableBool("IsBashing", graphBashing);
 
         player->GetGraphVariableBool("TDM_TargetLock", targetLocked);
-
     }
 
     // Match the player's already-established JS blocking indicator signal.
@@ -974,13 +875,13 @@ void Prisma::UpdatePlayerHUD()
 
     const bool inGuardState = player &&
 
-        (player->IsBlocking() || graphBlocking || graphBashing ||
+                              (player->IsBlocking() || graphBlocking || graphBashing ||
 
-         (actorState && actorState->GetAttackState() == RE::ATTACK_STATE_ENUM::kBash) ||
+                               (actorState && actorState->GetAttackState() == RE::ATTACK_STATE_ENUM::kBash) ||
 
-         allBlock == 1 || parryActive == 1 || parryWindow == 1 ||
+                               allBlock == 1 || parryActive == 1 || parryWindow == 1 ||
 
-         parrySuccess == 1 || unblockable == 1 || validAttackDirection != 0);
+                               parrySuccess == 1 || unblockable == 1 || validAttackDirection != 0);
 
     const bool blockEligible = !Settings::PlayerUI.showOnlyWhileBlocking || inGuardState;
 
@@ -991,57 +892,50 @@ void Prisma::UpdatePlayerHUD()
                           actorState && actorState->IsWeaponDrawn() && blockEligible && targetLockEligible;
 
     if (!playerReady || !gameActive) {
-
         UpdateRuntimeState(false, false, 50.0f, 50.0f, resolutionScale, false);
 
         return;
-
     }
 
     const auto* playerCamera = RE::PlayerCamera::GetSingleton();
 
     if (!playerCamera || playerCamera->IsInFirstPerson() || Settings::PlayerUI.centerInThirdPerson) {
-
         UpdateRuntimeState(eligible, true, 50.0f, 50.0f, resolutionScale, false);
 
         return;
-
     }
 
     auto* root = player->Get3D(false);
 
     if (!root) {
-
         UpdateRuntimeState(false, true, 50.0f, 50.0f, resolutionScale, false);
 
         return;
-
     }
 
     // The same torso-node order used by Honor Combat's original Events.cpp.
 
     static const std::array<RE::BSFixedString, 6> torsoNodes{
 
-        RE::BSFixedString("NPC Spine1 [Spn1]"), RE::BSFixedString("NPC Spine2 [Spn2]"),
+        RE::BSFixedString("NPC Spine1 [Spn1]"),
+        RE::BSFixedString("NPC Spine2 [Spn2]"),
 
-        RE::BSFixedString("NPC Spine [Spn0]"), RE::BSFixedString("NPC COM [COM ]"),
+        RE::BSFixedString("NPC Spine [Spn0]"),
+        RE::BSFixedString("NPC COM [COM ]"),
 
-        RE::BSFixedString("Bip01 Spine1"), RE::BSFixedString("Bip01 Spine2")
+        RE::BSFixedString("Bip01 Spine1"),
+        RE::BSFixedString("Bip01 Spine2")
 
     };
 
     RE::NiAVObject* torso = root;
 
     for (const auto& name : torsoNodes) {
-
         if (auto* node = root->GetObjectByName(name)) {
-
             torso = node;
 
             break;
-
         }
-
     }
 
     auto* camera = RE::Main::WorldRootCamera();
@@ -1055,11 +949,9 @@ void Prisma::UpdatePlayerHUD()
     if (!camera || !camera->WorldPtToScreenPt3(torso->world.translate, x, y, depth, 1e-5f) ||
 
         !std::isfinite(x) || !std::isfinite(y)) {
-
         UpdateRuntimeState(false, true, 50.0f, 50.0f, resolutionScale, false);
 
         return;
-
     }
 
     float xPercent = x * 100.0f;
@@ -1067,7 +959,6 @@ void Prisma::UpdatePlayerHUD()
     float yPercent = (1.0f - y) * 100.0f;
 
     if (screen.width > 0 && screen.height > 0) {
-
         xPercent += Settings::PlayerUI.attachOffsetXPixels * resolutionScale * 100.0f /
 
                     static_cast<float>(screen.width);
@@ -1075,19 +966,16 @@ void Prisma::UpdatePlayerHUD()
         yPercent -= Settings::PlayerUI.attachOffsetYPixels * resolutionScale * 100.0f /
 
                     static_cast<float>(screen.height);
-
     }
 
     UpdateRuntimeState(eligible, true, std::clamp(xPercent, 0.0f, 100.0f),
 
                        std::clamp(yPercent, 0.0f, 100.0f), resolutionScale, true);
-
 }
 
 void Prisma::UpdateDirection(int direction)
 
 {
-
     direction = std::clamp(direction, 0, 3);
 
     if (currentDirection == direction) return;
@@ -1097,37 +985,29 @@ void Prisma::UpdateDirection(int direction)
     SendDirection();
 
     SyncVisibility();
-
 }
 
 void Prisma::UpdateAllBlock(bool allBlock)
 
 {
-
     if (currentAllBlock == allBlock)
 
     {
-
         return;
-
     }
 
     currentAllBlock = allBlock;
 
     SendDirection();
-
 }
 
 void Prisma::UpdateUnblockable(bool unblockable)
 
 {
-
     if (currentUnblockable == unblockable)
 
     {
-
         return;
-
     }
 
     currentUnblockable = unblockable;
@@ -1135,38 +1015,35 @@ void Prisma::UpdateUnblockable(bool unblockable)
     SendDirection();
 
     SyncVisibility();
-
 }
 
 void Prisma::UpdateParrySuccess(bool success)
 
 {
-
     if (currentParrySuccess == success)
 
     {
-
         return;
-
     }
 
     currentParrySuccess = success;
 
     SendDirection();
-
 }
 
-void Prisma::UpdateRuntimeState(bool eligible, bool previewEligible, float xPercent, float yPercent, float resolutionScale, bool attached)
+void Prisma::UpdateRuntimeState(bool eligible, bool previewEligible, float xPercent, float yPercent,
+                                float resolutionScale, bool attached)
 
 {
-
     xPercent = std::clamp(xPercent, 0.0f, 100.0f);
 
     yPercent = std::clamp(yPercent, 0.0f, 100.0f);
 
     resolutionScale = std::clamp(resolutionScale, 0.5f, 4.0f);
 
-    const bool changed = runtimeEligible != eligible || runtimePreviewEligible != previewEligible || runtimeAttached != attached || std::abs(runtimeXPercent - xPercent) >= 0.025f || std::abs(runtimeYPercent - yPercent) >= 0.025f ||
+    const bool changed = runtimeEligible != eligible || runtimePreviewEligible != previewEligible ||
+                         runtimeAttached != attached || std::abs(runtimeXPercent - xPercent) >= 0.025f ||
+                         std::abs(runtimeYPercent - yPercent) >= 0.025f ||
 
                          std::abs(runtimeResolutionScale - resolutionScale) >= 0.005f;
 
@@ -1185,47 +1062,43 @@ void Prisma::UpdateRuntimeState(bool eligible, bool previewEligible, float xPerc
     if (changed)
 
     {
-
         SendRuntimeState();
-
     }
 
     SyncVisibility();
-
 }
 
 void Prisma::UpdateAttackWarnings(const std::vector<AttackWarningVisual>& warnings)
 
 {
+    const auto nearlyEqual = [](float left, float right, float threshold) {
+        return std::abs(left - right) < threshold;
+    };
 
-    const auto nearlyEqual = [](float left, float right, float threshold) { return std::abs(left - right) < threshold; };
+    const bool changed =
+        attackWarnings.size() != warnings.size() ||
+        !std::equal(attackWarnings.begin(), attackWarnings.end(), warnings.begin(), warnings.end(),
 
-    const bool changed = attackWarnings.size() != warnings.size() || !std::equal(attackWarnings.begin(), attackWarnings.end(), warnings.begin(), warnings.end(),
+                    [&](const AttackWarningVisual& left, const AttackWarningVisual& right)
 
-                                                                                 [&](const AttackWarningVisual& left, const AttackWarningVisual& right)
+                    {
+                        return left.id == right.id && left.direction == right.direction &&
+                               left.blockDirection == right.blockDirection && left.blocking == right.blocking &&
+                               nearlyEqual(left.xPercent, right.xPercent, 0.025f) &&
 
-                                                                                 {
+                               nearlyEqual(left.yPercent, right.yPercent, 0.025f) &&
+                               nearlyEqual(left.resolutionScale, right.resolutionScale, 0.005f) &&
 
-                                                                                     return left.id == right.id && left.direction == right.direction && left.blockDirection == right.blockDirection && left.blocking == right.blocking && nearlyEqual(left.xPercent, right.xPercent, 0.025f) &&
-
-                                                                                            nearlyEqual(left.yPercent, right.yPercent, 0.025f) && nearlyEqual(left.resolutionScale, right.resolutionScale, 0.005f) &&
-
-                                                                                            nearlyEqual(left.distanceScale, right.distanceScale, 0.005f) &&
-                                                                                            left.hitFrameFlash == right.hitFrameFlash &&
-                                                                                            left.unblockable == right.unblockable &&
-                                                                                            left.allBlock == right.allBlock &&
-                                                                                            left.parryActive == right.parryActive &&
-                                                                                            left.parryWindow == right.parryWindow &&
-                                                                                            left.parrySuccess == right.parrySuccess;
-
-                                                                                 });
+                               nearlyEqual(left.distanceScale, right.distanceScale, 0.005f) &&
+                               left.hitFrameFlash == right.hitFrameFlash && left.unblockable == right.unblockable &&
+                               left.allBlock == right.allBlock && left.parryActive == right.parryActive &&
+                               left.parryWindow == right.parryWindow && left.parrySuccess == right.parrySuccess;
+                    });
 
     if (!changed)
 
     {
-
         return;
-
     }
 
     attackWarnings = warnings;
@@ -1233,13 +1106,11 @@ void Prisma::UpdateAttackWarnings(const std::vector<AttackWarningVisual>& warnin
     SendAttackWarnings();
 
     SyncVisibility();
-
 }
 
 void Prisma::Reset()
 
 {
-
     currentDirection = 0;
     currentAttackDirection = 0;
     currentParrying = false;
@@ -1271,7 +1142,6 @@ void Prisma::Reset()
     SendAttackWarnings();
 
     SyncVisibility();
-
 }
 
 // ============================================================================
@@ -1287,7 +1157,6 @@ void Prisma::Reset()
 namespace {
 
     bool RenderColorPicker(const char* label, std::array<float, 4>& color) {
-
         namespace ui = ImGuiMCP;
 
         constexpr ui::ImGuiColorEditFlags colorFlags =
@@ -1295,23 +1164,19 @@ namespace {
             ui::ImGuiColorEditFlags_AlphaBar | ui::ImGuiColorEditFlags_AlphaPreviewHalf;
 
         return ui::ColorEdit4(label, color.data(), colorFlags);
-
     }
 
     void SaveAndRefreshIfChanged(bool changed) {
-
         if (!changed) return;
 
         Settings::Save();
 
         Prisma::ApplyUISettings();
-
     }
 
 }
 
 void Prisma::RenderPlayerSettings() {
-
     namespace ui = ImGuiMCP;
 
     auto& s = Settings::PlayerUI;
@@ -1422,20 +1287,16 @@ void Prisma::RenderPlayerSettings() {
     SaveAndRefreshIfChanged(changed);
 
     if (ui::Button("Reset Player HUD Defaults")) {
-
         s = Settings::PlayerUISettings{};
         ResetPlayerAttackColor();
 
         Settings::Save();
 
         ApplyUISettings();
-
     }
-
 }
 
 void Prisma::RenderNPCSettings() {
-
     namespace ui = ImGuiMCP;
 
     auto& s = Settings::NPCUI;
@@ -1516,14 +1377,11 @@ void Prisma::RenderNPCSettings() {
     SaveAndRefreshIfChanged(changed);
 
     if (ui::Button("Reset NPC HUD Defaults")) {
-
         s = Settings::NPCUISettings{};
         NPCDirectionalBlock::ResetBlockingColor();
 
         Settings::Save();
 
         ApplyUISettings();
-
     }
-
 }

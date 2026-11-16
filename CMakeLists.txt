@@ -115,6 +115,20 @@ target_compile_definitions(
     PRIVATE IS_HOST_PLUGIN
 )
 
+target_compile_definitions(
+    ${PROJECT_NAME}
+    PRIVATE IS_HOST_PLUGIN
+)
+
+# Suppress third-party header warnings
+if(MSVC)
+    target_compile_options(${PROJECT_NAME} PRIVATE
+        /wd4099  # Struct/class declaration mismatch
+        /wd5054  # Deprecated bitwise operations between enum types
+        /wd4505  # Unreferenced functions removed by compiler
+    )
+endif()
+
 set(wildlander_output false)
 set(steam_owrt_output false)
 set(steam_mods_output true)

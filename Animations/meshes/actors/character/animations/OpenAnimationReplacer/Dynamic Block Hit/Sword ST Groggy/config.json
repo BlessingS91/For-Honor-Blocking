@@ -8,7 +8,7 @@
             "condition": "CompareValues",
             "requiredVersion": "1.0.0.0",
             "Value A": {
-                "graphVariable": "GuardBrokenFHB",
+                "graphVariable": "UnblockableReactionFHB",
                 "graphVariableType": "Int"
             },
             "Comparison": "==",
