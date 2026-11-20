@@ -87,6 +87,7 @@ namespace
     constexpr char kPlayerColorIniPath[] = "Data/SKSE/Plugins/ForHonorBlocking.ini";
     constexpr char kPlayerColorIniSection[] = "PlayerUI";
     constexpr char kPlayerAttackColorKey[] = "AttackColor";
+    constexpr char kPlayerAttackIndicatorKey[] = "ShowAttackIndicator";
     constexpr std::array<float, 4> kDefaultPlayerAttackColor{0.95f, 0.72f, 0.22f, 1.0f};
 
     std::array<float, 4> LoadPlayerAttackColor() {
@@ -122,6 +123,22 @@ namespace
     void ResetPlayerAttackColor() {
         PlayerAttackColor() = kDefaultPlayerAttackColor;
         SavePlayerAttackColor();
+    }
+
+    bool& ShowPlayerAttackIndicator() {
+        static bool enabled = GetPrivateProfileIntA(
+            kPlayerColorIniSection, kPlayerAttackIndicatorKey, 1, kPlayerColorIniPath) != 0;
+        return enabled;
+    }
+
+    void SavePlayerAttackIndicator() {
+        WritePrivateProfileStringA(kPlayerColorIniSection, kPlayerAttackIndicatorKey,
+                                   ShowPlayerAttackIndicator() ? "1" : "0", kPlayerColorIniPath);
+    }
+
+    void ResetPlayerAttackIndicator() {
+        ShowPlayerAttackIndicator() = true;
+        SavePlayerAttackIndicator();
     }
 
     std::string BuildSettingsPayload()
@@ -405,7 +422,8 @@ namespace
 
         payload = std::to_string(currentDirection) + "|" + (currentAllBlock ? "1" : "0") + "|" +
                   (currentUnblockable ? "1" : "0") + "|" + (currentParrySuccess ? "1" : "0") + "|" +
-                  (currentBlocking ? "1" : "0") + "|" + std::to_string(currentAttackDirection) + "|" +
+                  (currentBlocking ? "1" : "0") + "|" +
+                  std::to_string(ShowPlayerAttackIndicator() ? currentAttackDirection : 0) + "|" +
                   (currentParrying ? "1" : "0");
 
         prismaUI->InteropCall(view, "updateForHonorCombatDirection", payload.c_str());
@@ -782,7 +800,7 @@ void Prisma::UpdatePlayerHUD()
 
     if (player) {
         player->GetGraphVariableInt("BlockDirectionFHB", direction);
-        player->GetGraphVariableInt("AttackDirectionFHB", attackDirection);
+        player->GetGraphVariableInt("PlayerAttackIndicatorFHB", attackDirection);
 
         player->GetGraphVariableInt("AllBlockFHB", allBlock);
 
@@ -799,8 +817,8 @@ void Prisma::UpdatePlayerHUD()
 
     UpdateDirection(std::clamp(static_cast<int>(direction), 0, 3));
 
-    // Both player and NPC use AttackDirectionFHB. Only its assignment differs.
-    // The HUD does not detect or assign attack directions.
+    // PlayerAttackIndicatorFHB is player-local and visual-only.
+    // Gameplay AttackDirectionFHB remains defender-relative in AttackPosition.cpp.
     const bool isParrying = parryActive == 1 || parryWindow == 1;
     if (currentParrying != isParrying) {
         currentParrying = isParrying;
@@ -881,7 +899,8 @@ void Prisma::UpdatePlayerHUD()
 
                                allBlock == 1 || parryActive == 1 || parryWindow == 1 ||
 
-                               parrySuccess == 1 || unblockable == 1 || validAttackDirection != 0);
+                               parrySuccess == 1 || unblockable == 1 ||
+                               (ShowPlayerAttackIndicator() && validAttackDirection != 0));
 
     const bool blockEligible = !Settings::PlayerUI.showOnlyWhileBlocking || inGuardState;
 
@@ -1194,6 +1213,10 @@ void Prisma::RenderPlayerSettings() {
     ui::Separator();
 
     changed |= ui::Checkbox("Enable Player HUD", &s.enabled);
+    if (ui::Checkbox("Show Player Attack Indicator", &ShowPlayerAttackIndicator())) {
+        SavePlayerAttackIndicator();
+        changed = true;
+    }
 
     changed |= ui::Checkbox("Preview While Editing", &s.editMode);
 
@@ -1289,6 +1312,7 @@ void Prisma::RenderPlayerSettings() {
     if (ui::Button("Reset Player HUD Defaults")) {
         s = Settings::PlayerUISettings{};
         ResetPlayerAttackColor();
+        ResetPlayerAttackIndicator();
 
         Settings::Save();
 

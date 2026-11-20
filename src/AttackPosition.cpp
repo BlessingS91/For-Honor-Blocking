@@ -23,11 +23,14 @@ namespace {
     // SHARED PLAYER/NPC ATTACK DIRECTION STATE
     // ========================================================================
     constexpr char kAttackDirectionVariable[] = "AttackDirectionFHB";
+    constexpr char kPlayerAttackIndicatorVariable[] = "PlayerAttackIndicatorFHB";
     std::mutex g_attackDirectionsMutex;
     std::unordered_map<RE::FormID, int> g_attackDirections;
     std::unordered_map<RE::FormID, RE::ActorHandle> g_activeWarnings;
     // Lock direction after the first indicator/swing, until an existing release event.
     std::unordered_set<RE::FormID> g_indicatorDirectionLocked;
+    // Player-only indicator is independent of combat-target availability.
+    bool g_playerIndicatorDirectionLocked = false;
     std::unordered_set<RE::FormID> g_swingStarted;
     // The same animation-event sink tracks player attacks; registration is
     // independent of NPC combat state and retried by the existing update.
@@ -55,7 +58,7 @@ namespace {
             id, PendingRegistration{actor->GetHandle(), std::chrono::steady_clock::now() + kRetryInterval, 0});
     }
     // ========================================================================
-    // ATTACK POSITION CLASSIFICATION - player-head height and horizontal center band
+    // ATTACK POSITION CLASSIFICATION - defender-head height and horizontal center band
     // ========================================================================
     RE::NiAVObject* FindFirstNode(RE::NiAVObject* a_root, std::initializer_list<const char*> a_names) {
         if (!a_root) {
@@ -68,25 +71,20 @@ namespace {
         }
         return nullptr;
     }
-    // NPC and player hand positions use the player's chest as the reference.
-    // The player's local coordinate system preserves left/right classification
-    // when the camera or character rotates.
+    // Both player and NPC attacks use the defender's chest and local axes.
     RE::NiAVObject* GetTorsoNode(RE::Actor* actor);
-    RE::NiAVObject* GetReferenceChestNode(RE::PlayerCharacter* player) {
-        auto* referenceRoot = player ? player->Get3D(false) : nullptr;
+    RE::NiAVObject* GetReferenceChestNode(RE::Actor* target) {
+        auto* referenceRoot = target ? target->Get3D(false) : nullptr;
         auto* referenceChest = referenceRoot
             ? FindFirstNode(referenceRoot, {"NPC Spine2 [Spn2]", "NPC Spine1 [Spn1]",
                                             "NPC Spine [Spn0]", "Bip01 Spine2", "Bip01 Spine1"})
             : nullptr;
-        return referenceChest ? referenceChest : GetTorsoNode(player);
+        return referenceChest ? referenceChest : GetTorsoNode(target);
     }
-    // Return the player's head Z relative to the player's chest in the same
-    // actor-local coordinate frame used by both hand and weapon-tip samples.
-    // NPCs continue to classify relative to the player, as before.
-    std::optional<float> GetPlayerHeadHeightAboveChest() {
-        auto* player = RE::PlayerCharacter::GetSingleton();
-        auto* root = player ? player->Get3D(false) : nullptr;
-        auto* chest = GetReferenceChestNode(player);
+    // Return the defender's head Z relative to their chest in defender-local space.
+    std::optional<float> GetTargetHeadHeightAboveChest(RE::Actor* target) {
+        auto* root = target ? target->Get3D(false) : nullptr;
+        auto* chest = GetReferenceChestNode(target);
         auto* head = root
             ? FindFirstNode(root, {"NPC Head [Head]", "Bip01 Head", "NPC Neck [Neck]", "Bip01 Neck"})
             : nullptr;
@@ -97,15 +95,12 @@ namespace {
         const float headAboveChest = localHead.z - localChest.z;
         return std::isfinite(headAboveChest) ? std::optional<float>{headAboveChest} : std::nullopt;
     }
-    std::optional<RE::NiPoint3> GetHandPositionRelativeToReference(RE::Actor* attacker, bool leftHand) {
-        if (!attacker || !attacker->Is3DLoaded()) return std::nullopt;
-        auto* player = RE::PlayerCharacter::GetSingleton();
-        if (!player || !player->Is3DLoaded()) return std::nullopt;
-        // NPC -> player chest; player -> own chest. Both share one frame,
-        // but the attack hand comes from the individual attacking actor.
+    std::optional<RE::NiPoint3> GetHandPositionRelativeToReference(RE::Actor* attacker, RE::Actor* target, bool leftHand) {
+        if (!attacker || !attacker->Is3DLoaded() || !target || !target->Is3DLoaded()) return std::nullopt;
+        // Sample the attacker's hand in the defender's local frame.
         auto* attackingRoot = attacker->Get3D(false);
-        auto* referenceRoot = player->Get3D(false);
-        auto* referenceChest = GetReferenceChestNode(player);
+        auto* referenceRoot = target->Get3D(false);
+        auto* referenceChest = GetReferenceChestNode(target);
         if (!attackingRoot || !referenceRoot || !referenceChest) return std::nullopt;
         static auto* creatureKeyword = RE::TESForm::LookupByID<RE::BGSKeyword>(0x13795);
         static auto* animalKeyword = RE::TESForm::LookupByID<RE::BGSKeyword>(0x13798);
@@ -187,14 +182,13 @@ namespace {
         RE::NiPoint3 relativePosition;
         bool usedWeaponTip{false};
     };
-    std::optional<AttackPositionSample> GetTrackedPositionRelativeToReference(RE::Actor* attacker, bool leftHand) {
+    std::optional<AttackPositionSample> GetTrackedPositionRelativeToReference(RE::Actor* attacker, RE::Actor* target, bool leftHand) {
         // Mode is only sampled when an indicator/swing event requests a direction.
         // No continuous tracking or repeated model traversal while Hand is selected.
         if (AttackTrackingMode::useWeaponTip.load(std::memory_order_relaxed)) {
             if (const auto tip = GetWeaponTipWorldPosition(attacker, leftHand)) {
-                auto* player = RE::PlayerCharacter::GetSingleton();
-                auto* referenceRoot = player ? player->Get3D(false) : nullptr;
-                auto* referenceChest = GetReferenceChestNode(player);
+                auto* referenceRoot = target ? target->Get3D(false) : nullptr;
+                auto* referenceChest = GetReferenceChestNode(target);
                 if (referenceRoot && referenceChest) {
                     const auto inverse = referenceRoot->world.Invert();
                     const auto localTip = inverse * tip->worldPosition;
@@ -213,18 +207,18 @@ namespace {
         }
         // Hand mode, or weapon unavailable/invalid. Both modes use the same
         // adjustable head-height AND horizontal-center-band test for Top.
-        const auto hand = GetHandPositionRelativeToReference(attacker, leftHand);
+        const auto hand = GetHandPositionRelativeToReference(attacker, target, leftHand);
         if (!hand) return std::nullopt;
         return AttackPositionSample{*hand, false};
     }
     // Top is deliberately strict in TWO independent dimensions:
-    //   1. Sample Z must be above the player's head plus the height offset.
-    //   2. Sample X must be inside the center band around the player's chest.
+    //   1. Sample Z must be above the defender's head plus the height offset.
+    //   2. Sample X must be inside the center band around the defender's chest.
     // A high off-center hit is therefore still Right/Left. No cone-angle math.
     // Both Hand and Weapon Tip mode use this exact classifier.
     int ClassifyTrackedPosition(const RE::NiPoint3& relativePosition,
                                 const std::optional<float>& headHeightAboveChest,
-                                bool leftHand, bool isPlayer) {
+                                bool leftHand) {
         const float heightOffset = std::clamp(
             AttackTrackingMode::topHeadHeightOffset.load(std::memory_order_relaxed), -100.0f, 100.0f);
         const float centerHalfWidth = std::clamp(
@@ -234,11 +228,23 @@ namespace {
             std::abs(relativePosition.x) <= centerHalfWidth) {
             return 1;  // Top
         }
-        // Maintain existing player/NPC left-right mappings, including the
-        // attacking-hand fallback when the selected point is on center.
-        if (relativePosition.x > 0.5f) return isPlayer ? 2 : 3;
-        if (relativePosition.x < -0.5f) return isPlayer ? 3 : 2;
+        // The defender-relative left/right mapping is identical for all attackers.
+        // Preserve the attacking-hand fallback when the selected point is centered.
+        if (relativePosition.x > 0.5f) return 3;
+        if (relativePosition.x < -0.5f) return 2;
         return leftHand ? 3 : 2;
+    }
+    // Preserve the original player-relative UI orientation, independent of
+    // defender-relative AttackDirectionFHB used for gameplay.
+    int ClassifyPlayerIndicatorPosition(const RE::NiPoint3& relativePosition,
+                                        const std::optional<float>& headHeightAboveChest,
+                                        bool leftHand) {
+        const int direction = ClassifyTrackedPosition(relativePosition, headHeightAboveChest, leftHand);
+        // Top and centered-hand fallback match the original player classifier.
+        // The player HUD's off-center left/right mapping was the reverse of the
+        // defender-relative NPC/gameplay mapping.
+        if (direction == 1 || std::abs(relativePosition.x) <= 0.5f) return direction;
+        return direction == 2 ? 3 : 2;
     }
     std::string ToLower(std::string_view a_value) {
         std::string result;
@@ -402,14 +408,22 @@ void AttackPosition::ResetAttackDirection(RE::Actor* a_actor) {
         return;
     }
     bool hadAssignedDirection = false;
+    bool hadPlayerIndicator = false;
     {
         std::scoped_lock lock(g_attackDirectionsMutex);
         const auto actorID = a_actor->GetFormID();
         hadAssignedDirection = g_attackDirections.erase(actorID) != 0;
         g_activeWarnings.erase(actorID);
-        // Release the lock alongside the direction and HUD warning.
+        // Release both independent direction locks at the same attack end.
         g_indicatorDirectionLocked.erase(actorID);
+        if (a_actor->IsPlayerRef()) {
+            hadPlayerIndicator = g_playerIndicatorDirectionLocked;
+            g_playerIndicatorDirectionLocked = false;
+        }
         g_swingStarted.erase(actorID);
+    }
+    if (hadPlayerIndicator) {
+        a_actor->SetGraphVariableInt(kPlayerAttackIndicatorVariable, 0);
     }
     // An already ended attack cannot send another graph write or End update.
     if (hadAssignedDirection) {
@@ -445,17 +459,37 @@ void AttackPosition::ResolveAttackDirection(RE::Actor* a_actor, bool a_leftHand)
     a_actor->GetGraphVariableInt("ParryActiveFHB", parryActive);
     a_actor->GetGraphVariableInt("ParryWindowFHB", parryWindow);
     if (parryActive == 1 || parryWindow == 1) return;
-    // If the player's dedicated from-guard moveset explicitly chose its
-    // direction, keep it. Automatic detection only fills an unset value.
+    // The player HUD uses a separate, player-local sample. Do this before
+    // looking up the combat target so untargeted swings still show an indicator.
     if (a_actor->IsPlayerRef()) {
-        std::int32_t explicitDirection = 0;
-        if (a_actor->GetGraphVariableInt(kAttackDirectionVariable, explicitDirection) &&
-            explicitDirection >= 1 && explicitDirection <= 3) {
+        bool shouldResolveIndicator = false;
+        {
             std::scoped_lock lock(g_attackDirectionsMutex);
-            g_indicatorDirectionLocked.insert(actorID);
-            return;
+            shouldResolveIndicator = !g_playerIndicatorDirectionLocked;
+        }
+        if (shouldResolveIndicator) {
+            if (const auto indicatorSample = GetTrackedPositionRelativeToReference(a_actor, a_actor, a_leftHand)) {
+                const auto playerHeadHeight = GetTargetHeadHeightAboveChest(a_actor);
+                const int indicatorDirection = ClassifyPlayerIndicatorPosition(
+                    indicatorSample->relativePosition, playerHeadHeight, a_leftHand);
+                bool commitIndicator = false;
+                {
+                    std::scoped_lock lock(g_attackDirectionsMutex);
+                    if (!g_playerIndicatorDirectionLocked) {
+                        g_playerIndicatorDirectionLocked = true;
+                        commitIndicator = true;
+                    }
+                }
+                if (commitIndicator) {
+                    const bool updated = a_actor->SetGraphVariableInt(kPlayerAttackIndicatorVariable, indicatorDirection);
+                    SKSE::log::debug(
+                        "[Player Attack Indicator] direction={} source={} graphUpdated={}",
+                        indicatorDirection, indicatorSample->usedWeaponTip ? "weapon-tip" : "hand", updated);
+                }
+            }
         }
     }
+    // Gameplay AttackDirectionFHB remains defender-relative for player and NPC.
     {
         std::scoped_lock lock(g_attackDirectionsMutex);
         if (g_indicatorDirectionLocked.contains(actorID)) {
@@ -463,15 +497,24 @@ void AttackPosition::ResolveAttackDirection(RE::Actor* a_actor, bool a_leftHand)
             return;  // Direction already chosen for this swing.
         }
     }
-    const auto sample = GetTrackedPositionRelativeToReference(a_actor, a_leftHand);
+    // Use the current defender, not the player singleton or the attacker's own chest.
+    // This event-time target may be absent, particularly for untargeted player swings.
+    const auto targetHandle = a_actor->GetActorRuntimeData().currentCombatTarget.get();
+    auto* target = targetHandle.get();
+    if (!target || target == a_actor || !target->Is3DLoaded()) {
+        SKSE::log::info("[Attack Direction] RESOLVE_NO_TARGET actor={:08X} isPlayer={} inCombat={}",
+                        actorID, a_actor->IsPlayerRef(), a_actor->IsInCombat());
+        a_actor->SetGraphVariableInt(kAttackDirectionVariable, 0);
+        return;
+    }
+    const auto sample = GetTrackedPositionRelativeToReference(a_actor, target, a_leftHand);
     if (!sample) {
         SKSE::log::info("[Attack Direction] Resolve failed actor={:08X}: {} tracking position not found.",
                         a_actor->GetFormID(), a_leftHand ? "left" : "right");
         return;
     }
-    const auto headHeightAboveChest = GetPlayerHeadHeightAboveChest();
-    const int direction = ClassifyTrackedPosition(sample->relativePosition, headHeightAboveChest,
-                                                   a_leftHand, a_actor->IsPlayerRef());
+    const auto headHeightAboveChest = GetTargetHeadHeightAboveChest(target);
+    const int direction = ClassifyTrackedPosition(sample->relativePosition, headHeightAboveChest, a_leftHand);
     {
         std::scoped_lock lock(g_attackDirectionsMutex);
         if (!g_indicatorDirectionLocked.insert(actorID).second) {
@@ -492,10 +535,10 @@ void AttackPosition::ResolveAttackDirection(RE::Actor* a_actor, bool a_leftHand)
             target && target.get() == player, graphUpdated);
     }
     SKSE::log::info(
-        "[Attack Direction] {} {:08X}: hand={} source={} relativeX={:.2f} relativeY={:.2f} "
+        "[Attack Direction] {} {:08X} target={:08X}: hand={} source={} relativeX={:.2f} relativeY={:.2f} "
         "heightAboveChest={:.2f} headAvailable={} heightAboveHead={:.2f} "
         "topHeightOffset={:.2f} topCenterHalfWidth={:.2f} direction={} graphUpdated={}.",
-        a_actor->IsPlayerRef() ? "Player" : "NPC", a_actor->GetFormID(), a_leftHand ? "L" : "R",
+        a_actor->IsPlayerRef() ? "Player" : "NPC", a_actor->GetFormID(), target->GetFormID(), a_leftHand ? "L" : "R",
         sample->usedWeaponTip ? "weapon-tip" : "hand", sample->relativePosition.x, sample->relativePosition.y,
         sample->relativePosition.z, headHeightAboveChest.has_value(),
         headHeightAboveChest ? sample->relativePosition.z - *headHeightAboveChest : 0.0f,
@@ -751,6 +794,7 @@ void AttackPosition::RegisterSinksForExistingCombatants() {
             g_attackDirections.clear();
             g_activeWarnings.clear();
             g_indicatorDirectionLocked.clear();
+            g_playerIndicatorDirectionLocked = false;
             g_swingStarted.clear();
         }
         {

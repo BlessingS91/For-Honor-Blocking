@@ -1,5 +1,6 @@
 #include "WeaponClash.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <mutex>
@@ -16,80 +17,89 @@ namespace {
     constexpr auto kClashCooldown = std::chrono::milliseconds(350);
 
     std::mutex clashMutex;
-    std::unordered_map<RE::FormID, Clock::time_point> lastClashes;
+    std::unordered_map<std::uint64_t, Clock::time_point> lastClashes;
 
-    bool IsAttacking(RE::Actor* actor) {
+    // Combat score = current skill for the equipped melee weapon + Block skill.
+    // Return false if the actor doesn't have a supported melee weapon equipped.
+    bool GetClashScore(RE::Actor* actor, float& score) {
         if (!actor) {
             return false;
         }
 
-        const auto* state = actor->AsActorState();
-
-        if (!state) {
+        auto* avOwner = actor->AsActorValueOwner();
+        if (!avOwner) {
             return false;
-        }
-
-        switch (state->GetAttackState()) {
-            case RE::ATTACK_STATE_ENUM::kSwing:
-            case RE::ATTACK_STATE_ENUM::kHit:
-            case RE::ATTACK_STATE_ENUM::kFollowThrough:
-                return true;
-
-            default:
-                return false;
-        }
-    }
-
-    int GetWeaponTier(RE::Actor* actor) {
-        if (!actor) {
-            return 0;
         }
 
         auto* equipped = actor->GetEquippedObject(false);
         auto* weapon = equipped ? equipped->As<RE::TESObjectWEAP>() : nullptr;
 
+        // Fall back to the left hand if the right hand has no weapon.
         if (!weapon) {
-            return 0;
+            equipped = actor->GetEquippedObject(true);
+            weapon = equipped ? equipped->As<RE::TESObjectWEAP>() : nullptr;
         }
 
-        switch (weapon->GetWeaponType()) {
-            case RE::WEAPON_TYPE::kOneHandDagger:
-                return 1;
-
-            case RE::WEAPON_TYPE::kOneHandSword:
-            case RE::WEAPON_TYPE::kOneHandAxe:
-            case RE::WEAPON_TYPE::kOneHandMace:
-                return 2;
-
-            case RE::WEAPON_TYPE::kTwoHandSword:
-                return 3;
-
-            case RE::WEAPON_TYPE::kTwoHandAxe:
-                return 4;
-
-            default:
-                return 0;
-        }
-    }
-
-    bool CanTriggerClash(RE::Actor* enemy) {
-        if (!enemy) {
+        if (!weapon) {
             return false;
         }
 
-        const auto now = Clock::now();
+        RE::ActorValue weaponSkill;
+        switch (weapon->GetWeaponType()) {
+            case RE::WEAPON_TYPE::kOneHandDagger:
+            case RE::WEAPON_TYPE::kOneHandSword:
+            case RE::WEAPON_TYPE::kOneHandAxe:
+            case RE::WEAPON_TYPE::kOneHandMace:
+                weaponSkill = RE::ActorValue::kOneHanded;
+                break;
 
+            case RE::WEAPON_TYPE::kTwoHandSword:
+            case RE::WEAPON_TYPE::kTwoHandAxe:
+                weaponSkill = RE::ActorValue::kTwoHanded;
+                break;
+
+            default:
+                return false;
+        }
+
+        score = avOwner->GetActorValue(weaponSkill) + avOwner->GetActorValue(RE::ActorValue::kBlock);
+        return true;
+    }
+
+    // Parry and unblockable attacks are managed by their own combat systems.
+    // Weapon clashes must never interrupt either state.
+    bool IsClashImmune(RE::Actor* actor) {
+        if (!actor) {
+            return false;
+        }
+
+        std::int32_t parryActive = 0;
+        std::int32_t parryWindow = 0;
+        std::int32_t unblockable = 0;
+
+        actor->GetGraphVariableInt("ParryActiveFHB", parryActive);
+        actor->GetGraphVariableInt("ParryWindowFHB", parryWindow);
+        actor->GetGraphVariableInt("UnblockableFHB", unblockable);
+
+        return parryActive == 1 || parryWindow == 1 || unblockable == 1;
+    }
+
+    bool CanTriggerClash(RE::Actor* actorA, RE::Actor* actorB) {
+        const auto idA = actorA->GetFormID();
+        const auto idB = actorB->GetFormID();
+        const auto lowID = std::min(idA, idB);
+        const auto highID = std::max(idA, idB);
+        const std::uint64_t pairID = (static_cast<std::uint64_t>(lowID) << 32) | highID;
+
+        const auto now = Clock::now();
         std::scoped_lock lock(clashMutex);
 
-        const auto id = enemy->GetFormID();
-        const auto it = lastClashes.find(id);
-
+        const auto it = lastClashes.find(pairID);
         if (it != lastClashes.end() && now - it->second < kClashCooldown) {
             return false;
         }
 
-        lastClashes[id] = now;
-
+        lastClashes[pairID] = now;
         return true;
     }
 }
@@ -98,76 +108,43 @@ PRECISION_API::WeaponCollisionCallbackReturn WeaponClash::OnWeaponCollision(
     const PRECISION_API::PrecisionHitData& hitData) {
     PRECISION_API::WeaponCollisionCallbackReturn result{};
 
-    auto* attacker = hitData.attacker;
-    auto* target = hitData.target ? hitData.target->As<RE::Actor>() : nullptr;
+    auto* actorA = hitData.attacker;
+    auto* actorB = hitData.target ? hitData.target->As<RE::Actor>() : nullptr;
 
-    if (!attacker || !target || attacker == target) {
+    if (!actorA || !actorB || actorA == actorB || actorA->IsDead() || actorB->IsDead() ||
+        actorA->IsDisabled() || actorB->IsDisabled()) {
         return result;
     }
 
-    auto* player = RE::PlayerCharacter::GetSingleton();
-
-    if (!player) {
+    // Either special state makes the entire collision ineligible for a clash.
+    // Do not apply recoil or consume the normal clash cooldown.
+    if (IsClashImmune(actorA) || IsClashImmune(actorB)) {
         return result;
     }
 
-    RE::Actor* enemy = nullptr;
+    float scoreA = 0.0f;
+    float scoreB = 0.0f;
 
-    if (attacker == player) {
-        enemy = target;
-    } else if (target == player) {
-        enemy = attacker;
-    } else {
+    if (!GetClashScore(actorA, scoreA) || !GetClashScore(actorB, scoreB) || scoreA == scoreB) {
         return result;
     }
 
-    if (!enemy || enemy->IsDead() || enemy->IsDisabled()) {
+    if (!CanTriggerClash(actorA, actorB)) {
         return result;
     }
 
-    if (!IsAttacking(player) || !IsAttacking(enemy)) {
-        return result;
-    }
+    const bool actorAWins = scoreA > scoreB;
+    auto* winner = actorAWins ? actorA : actorB;
+    auto* loser = actorAWins ? actorB : actorA;
+    const float winningScore = actorAWins ? scoreA : scoreB;
+    const float losingScore = actorAWins ? scoreB : scoreA;
 
-    std::int32_t playerDirection = 0;
-    std::int32_t enemyDirection = 0;
-
-    const bool gotPlayerDirection = player->GetGraphVariableInt("BlockDirectionFHB", playerDirection);
-
-    const bool gotEnemyDirection = enemy->GetGraphVariableInt("AttackDirectionFHB", enemyDirection);
-
-    if (!gotPlayerDirection || !gotEnemyDirection) {
-        return result;
-    }
-
-    if (playerDirection < 1 || playerDirection > 3 || enemyDirection < 1 || enemyDirection > 3 ||
-        playerDirection != enemyDirection) {
-        return result;
-    }
-
-    const int playerTier = GetWeaponTier(player);
-    const int enemyTier = GetWeaponTier(enemy);
-
-    if (playerTier == 0 || enemyTier == 0) {
-        return result;
-    }
-
-    if (!CanTriggerClash(enemy)) {
-        return result;
-    }
-
-    if (playerTier > enemyTier) {
-        Gameplay::ApplyLargeStagger(enemy, player);
-    } else {
-        Gameplay::ApplyNormalStagger(enemy, player);
-    }
+    Gameplay::ApplyLargeStagger(loser, winner);
 
     if (Settings::debugLogging) {
         logger::info(
-            "[WEAPON CLASH] Player={} | Enemy={} | Direction={} | "
-            "PlayerTier={} | EnemyTier={} | Recoil={}",
-            player->GetName(), enemy->GetName(), playerDirection, playerTier, enemyTier,
-            playerTier > enemyTier ? "LARGE" : "NORMAL");
+            "[WEAPON CLASH] Winner={} ({:.1f}) | Loser={} ({:.1f}) | LARGE recoil",
+            winner->GetName(), winningScore, loser->GetName(), losingScore);
     }
 
     return result;
@@ -180,7 +157,6 @@ void WeaponClash::Install(SKSE::PluginHandle pluginHandle, PRECISION_API::IVPrec
     }
 
     PRECISION_API::WeaponCollisionCallback callback = OnWeaponCollision;
-
     const auto result = precisionAPI->AddWeaponWeaponCollisionCallback(pluginHandle, std::move(callback));
 
     if (result != PRECISION_API::APIResult::OK) {
